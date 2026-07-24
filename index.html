@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MWAA Agent — Sequence Design</title>
+<meta name="description" content="Production sequence diagram for a Claude-powered MWAA agent handling both aggregate failure counts and root-cause diagnosis." />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #F3F5F6;
+    --surface: #FDFEFE;
+    --surface-2: #E9EEF0;
+    --text: #14202A;
+    --text-muted: #56666F;
+    --border: #DCE3E6;
+    --accent: #0B7285;
+    --accent-soft: rgba(11, 114, 133, 0.10);
+    --accent-ink: #075866;
+
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-body: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10161B;
+      --surface: #161E24;
+      --surface-2: #1D262D;
+      --text: #E7EDF0;
+      --text-muted: #93A3AC;
+      --border: #283238;
+      --accent: #45BFB8;
+      --accent-soft: rgba(69, 191, 184, 0.12);
+      --accent-ink: #7FDAD4;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 0.55rem;
+    height: 0.55rem;
+    background: var(--accent);
+    display: inline-block;
+    border-radius: 1px;
+    transform: rotate(45deg);
+  }
+
+  header.hero {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 2.25rem;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 750;
+    font-size: clamp(1.65rem, 1.2rem + 1.6vw, 2.15rem);
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0;
+  }
+  .lede {
+    font-family: var(--font-body);
+    font-size: 1.05rem;
+    color: var(--text-muted);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .lede em {
+    font-style: normal;
+    color: var(--text);
+    border-bottom: 1px solid var(--accent);
+  }
+
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.2rem;
+    letter-spacing: -0.005em;
+    margin: 0;
+  }
+  .section-intro {
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    max-width: 68ch;
+    margin: -0.4rem 0 0;
+  }
+
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .legend-item {
+    background: var(--surface);
+    padding: 0.95rem 1.05rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .legend-name {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+  .legend-role {
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+
+  .diagram-panel {
+    border: 1px solid #1B3A4B;
+    border-radius: 6px;
+    background:
+      linear-gradient(rgba(255,255,255,0.55), rgba(255,255,255,0.55)),
+      repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(27,58,75,0.08) 23px, rgba(27,58,75,0.08) 24px),
+      repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(27,58,75,0.08) 23px, rgba(27,58,75,0.08) 24px),
+      #EAF2F6;
+    overflow: hidden;
+  }
+  .diagram-caption {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #1B3A4B;
+    background: #D8E8EC;
+    border-bottom: 1px solid #1B3A4B;
+    padding: 0.5rem 0.9rem;
+  }
+  .diagram-scroll {
+    overflow-x: auto;
+    padding: 1.25rem 1rem 1.5rem;
+  }
+  .diagram-scroll pre.mermaid {
+    margin: 0;
+    min-width: fit-content;
+  }
+
+  .notes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .note {
+    display: grid;
+    grid-template-columns: 1.4rem 1fr;
+    gap: 0.6rem;
+    align-items: start;
+  }
+  .note::before {
+    content: "";
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-top: 0.55rem;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .note-body { font-family: var(--font-body); }
+  .note-body b {
+    font-family: var(--font-display);
+    font-weight: 650;
+    color: var(--text);
+  }
+  .note-body code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 720px) {
+    .legend { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="hero">
+    <div class="eyebrow">Architecture — Sequence Design</div>
+    <h1>MWAA Diagnostic Agent, Production Sequence</h1>
+    <p class="lede">
+      Extends the current CLI agent to answer both <em>counting questions</em>
+      ("how many DAGs failed today") and <em>root-cause questions</em>
+      ("why did this DAG fail") without one blocking the other's latency —
+      served behind an API, cached, and still schema-validated on the way out.
+    </p>
+  </header>
+
+  <section>
+    <h2>Participants</h2>
+    <p class="section-intro">
+      Twelve moving parts across two lifecycles: a background pipeline that keeps
+      failure counts fresh, and an on-demand loop that answers a question.
+    </p>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-name">User</span><span class="legend-role">Asks a question in plain English.</span></div>
+      <div class="legend-item"><span class="legend-name">Client</span><span class="legend-role">Slack app, web console, or CLI — whatever surface took the question.</span></div>
+      <div class="legend-item"><span class="legend-name">API + Auth</span><span class="legend-role">Authenticates the caller, rate-limits, routes to the orchestrator.</span></div>
+      <div class="legend-item"><span class="legend-name">Agent Orchestrator</span><span class="legend-role">PydanticAI's run loop — dispatches tool calls, enforces the output schema.</span></div>
+      <div class="legend-item"><span class="legend-name">Claude</span><span class="legend-role">Decides which tool(s) to call and drafts the final structured answer.</span></div>
+      <div class="legend-item"><span class="legend-name">Tool Layer</span><span class="legend-role">The @agent.tool functions, bound to a live MwaaClient.</span></div>
+      <div class="legend-item"><span class="legend-name">Cache</span><span class="legend-role">Short-lived (~60s) read-through cache for repeat count queries.</span></div>
+      <div class="legend-item"><span class="legend-name">Aggregation Store</span><span class="legend-role">Pre-computed failure counts by env / DAG / task / day.</span></div>
+      <div class="legend-item"><span class="legend-name">SSM Proxy</span><span class="legend-role">In-VPC EC2 instance used only when the webserver is PRIVATE_ONLY.</span></div>
+      <div class="legend-item"><span class="legend-name">Airflow REST API</span><span class="legend-role">The environment's own API, reached via MWAA's InvokeRestApi.</span></div>
+      <div class="legend-item"><span class="legend-name">CloudWatch Logs</span><span class="legend-role">Last-resort log source when the REST log body comes back empty.</span></div>
+      <div class="legend-item"><span class="legend-name">EventBridge / Ingest λ</span><span class="legend-role">Background listener that keeps the aggregation store current.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Background ingestion — continuous</h2>
+    <p class="section-intro">
+      Runs independently of any user question. Every DAG/task state change lands
+      in the store within seconds, so counting questions never touch live Airflow.
+    </p>
+    <div class="diagram-panel">
+      <div class="diagram-caption">fig. 1 — ingestion pipeline</div>
+      <div class="diagram-scroll">
+<pre class="mermaid">
+%%{init: {'theme':'base', 'themeVariables': {
+  'background': 'transparent',
+  'actorBkg': '#EAF2F6',
+  'actorBorder': '#1B3A4B',
+  'actorTextColor': '#14202A',
+  'actorLineColor': '#5A7A88',
+  'signalColor': '#1B3A4B',
+  'signalTextColor': '#14202A',
+  'labelBoxBkgColor': '#D8E8EC',
+  'labelBoxBorderColor': '#1B3A4B',
+  'labelTextColor': '#14202A',
+  'loopTextColor': '#14202A',
+  'noteBkgColor': '#FCEFD9',
+  'noteBorderColor': '#A8720C',
+  'noteTextColor': '#4A3A12',
+  'fontFamily': 'ui-monospace, SF Mono, Consolas, monospace',
+  'fontSize': '13px'
+}}}%%
+sequenceDiagram
+    participant Env as MWAA Environments
+    participant EB as EventBridge Rule
+    participant Ingest as Ingestion Lambda
+    participant REST as Airflow REST API
+    participant Store as Aggregation Store
+
+    Env-->>EB: dag_run / task_instance state change
+    EB->>Ingest: invoke(event)
+    Ingest->>REST: fetch run + task detail
+    REST-->>Ingest: run/task payload
+    Ingest->>Store: upsert counts (env, dag_id, date, state)
+    Note over Store: pre-aggregated — failures by dag, by task, by env/day
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Query flow — on-demand</h2>
+    <p class="section-intro">
+      One loop, two branches. Claude picks the branch by reading intent from the
+      question — a counting tool for aggregates, the existing drill-down chain
+      for root cause. Both still exit through a schema-validated result.
+    </p>
+    <div class="diagram-panel">
+      <div class="diagram-caption">fig. 2 — question → answer</div>
+      <div class="diagram-scroll">
+<pre class="mermaid">
+%%{init: {'theme':'base', 'themeVariables': {
+  'background': 'transparent',
+  'actorBkg': '#EAF2F6',
+  'actorBorder': '#1B3A4B',
+  'actorTextColor': '#14202A',
+  'actorLineColor': '#5A7A88',
+  'signalColor': '#1B3A4B',
+  'signalTextColor': '#14202A',
+  'labelBoxBkgColor': '#D8E8EC',
+  'labelBoxBorderColor': '#1B3A4B',
+  'labelTextColor': '#14202A',
+  'loopTextColor': '#14202A',
+  'noteBkgColor': '#FCEFD9',
+  'noteBorderColor': '#A8720C',
+  'noteTextColor': '#4A3A12',
+  'activationBorderColor': '#0B7285',
+  'activationBkgColor': '#CFEAE8',
+  'fontFamily': 'ui-monospace, SF Mono, Consolas, monospace',
+  'fontSize': '13px'
+}}}%%
+sequenceDiagram
+    actor User
+    participant Client
+    participant API as API + Auth
+    participant Agent as Agent Orchestrator
+    participant Claude
+    participant Tools as Tool Layer
+    participant Cache
+    participant Store as Aggregation Store
+    participant Proxy as SSM Proxy (in-VPC)
+    participant REST as Airflow REST API
+    participant Logs as CloudWatch Logs
+
+    User->>Client: question
+    Client->>API: POST /ask {question, env}
+    API->>API: authenticate + authorize
+    API->>Agent: run_sync(question, deps)
+    Agent->>Claude: system prompt + question + tool schemas
+    Claude-->>Agent: tool_use(...)
+    Note over Agent,Claude: branch chosen from question intent, not a fixed switch
+
+    alt "how many dags/tasks failed" — aggregate
+        Agent->>Tools: get_failure_summary(env, scope, since)
+        Tools->>Cache: lookup(key)
+        alt cache hit
+            Cache-->>Tools: cached counts
+        else cache miss
+            Tools->>Store: query aggregated counts
+            Store-->>Tools: counts by dag / task / state
+            Tools->>Cache: write-through (ttl 60s)
+        end
+        Tools-->>Agent: summary JSON
+        Agent->>Claude: tool_result(summary)
+    else "why did dag X fail" — root cause
+        Agent->>Tools: get_dag_runs(dag_id, state=failed)
+        Tools->>REST: GET /dags/{id}/dagRuns
+        REST-->>Tools: runs
+        Tools-->>Agent: runs JSON
+        Agent->>Claude: tool_result(runs)
+        Claude-->>Agent: tool_use get_task_instances(run_id)
+        Agent->>Tools: get_task_instances(run_id)
+        Tools->>REST: GET .../taskInstances
+        REST-->>Tools: task instances
+        Tools-->>Agent: JSON
+        Agent->>Claude: tool_result(tasks)
+        Claude-->>Agent: tool_use get_task_log(task_id, try_number)
+        Agent->>Tools: get_task_log(task_id, try_number)
+        Tools->>REST: GET .../logs/{try_number}
+        alt private webserver — access denied
+            REST-->>Tools: AccessDeniedException
+            Tools->>Proxy: ssm send_command(aws mwaa invoke-rest-api)
+            Proxy->>REST: invoke-rest-api (from inside VPC)
+            REST-->>Proxy: log content
+            Proxy-->>Tools: stdout JSON
+        end
+        opt REST log body empty
+            Tools->>Logs: describe_log_streams + get_log_events
+            Logs-->>Tools: raw log events
+        end
+        Tools-->>Agent: extracted error context
+        Agent->>Claude: tool_result(log excerpt)
+    end
+
+    Claude-->>Agent: tool_use final_result(schema)
+    Agent-->>API: validated structured output
+    API-->>Client: formatted response
+    Client-->>User: answer
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Design notes</h2>
+    <p class="section-intro">
+      The parts that make this "prod" rather than the current single-shot CLI.
+    </p>
+    <div class="notes">
+      <div class="note">
+        <div class="note-body"><b>The store replaces the fan-out.</b> Answering
+        "how many DAGs failed across the environment" by calling the live REST
+        API once per DAG doesn't scale past a handful of DAGs and stalls chat
+        latency. The ingestion pipeline pre-aggregates continuously so the
+        counting path is a single indexed read.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>Counting and root-cause are different tools,
+        not different prompts.</b> <code>get_failure_summary</code>
+        is purpose-built and bounded; the existing three-call drill-down
+        (<code>get_dag_runs → get_task_instances → get_task_log</code>)
+        stays untouched for narrative diagnosis.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>The SSM proxy only guards the drill-down
+        path.</b> The counting path reads from the store, not live Airflow, so
+        it's unaffected by a PRIVATE_ONLY webserver — only root-cause log
+        fetches need the in-VPC fallback.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>Cache absorbs repeat questions.</b> A 60s
+        TTL in front of the store means "how many failed" asked three times in
+        one conversation costs one store read, not three.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>Output stays schema-validated either way.</b>
+        Both branches still exit through PydanticAI's <code>final_result</code>
+        tool — a count-style answer just validates against a leaner
+        <code>FailureSummary</code> model alongside the existing
+        <code>FailureDiagnosis</code>.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>mwaa-agent · sequence design · not a deployment diagram</footer>
+
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true });
+</script>
+
+</body>
+</html>
