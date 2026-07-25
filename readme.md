@@ -120,6 +120,52 @@ class FailureDiagnosis(BaseModel):
     summary: str
 ```
 
+## Why Pydantic
+
+**Pydantic** is a Python library for defining the *shape* of data as a plain
+class with type hints, then getting validation, parsing, and clear error
+messages for free — instead of hand-writing `isinstance` checks or trusting
+that a dict has the keys you expect. `FailureDiagnosis` above isn't just
+documentation; it's an executable contract:
+
+```python
+class FailureDiagnosis(BaseModel):
+    root_cause: str
+    recommendations: list[str]
+    ...
+```
+
+Try to construct one with `recommendations` missing, or `failed_tasks` sent
+as a string instead of a list, and Pydantic raises a validation error
+immediately — at the boundary — rather than some caller three lines later
+hitting an `AttributeError` or silently getting `None`.
+
+**Why it matters for an LLM agent specifically:** Claude's raw output is
+text. Nothing about an LLM guarantees it produces the same shape twice, or
+remembers every field, or resists wrapping the answer in extra prose.
+**PydanticAI** — the agent framework this project is built on, a separate
+package from Pydantic itself but built directly on top of it — uses Pydantic
+to close that gap:
+
+- Every `@agent.tool` function's parameters (`get_dag_runs(dag_id, state,
+  limit)`, etc.) are turned into a JSON schema straight from the Python type
+  hints in [agent.py](mwaa_agent/agent.py) — there's no hand-maintained
+  schema to drift out of sync with the code.
+- `output_type=FailureDiagnosis` in `build_agent()` becomes a schema Claude
+  must satisfy in its own response. If it doesn't validate — a missing
+  `summary`, `failed_tasks` of the wrong type — PydanticAI feeds the
+  validation error straight back to Claude and lets it retry (`retries=2`),
+  instead of the app crashing or silently shipping malformed output.
+- Downstream code gets real attributes and IDE autocomplete —
+  `diagnosis.root_cause`, `diagnosis.recommendations` — not
+  `diagnosis["root_cause"]` with a hope the key exists.
+
+Short version: Pydantic is the validation/typing layer; PydanticAI is the
+agent framework that leans on it to keep both *what the agent sends to its
+tools* and *what it hands back to you* well-formed — which is exactly what
+lets `main.py` print `d.recommendations` without ever checking whether it
+exists.
+
 ## Notes & extension ideas
 
 - Logs are trimmed to the traceback/ERROR region before being sent to the LLM to keep token usage low (`_extract_error_context`).
