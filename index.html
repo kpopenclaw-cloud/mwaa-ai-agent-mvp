@@ -201,9 +201,48 @@
     background: #D8E8EC;
     border-bottom: 1px solid #1B3A4B;
     padding: 0.5rem 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .zoom-btn {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    color: #1B3A4B;
+    background: #FDFEFE;
+    border: 1px solid #1B3A4B;
+    border-radius: 4px;
+    width: 1.4rem;
+    height: 1.4rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .zoom-btn:hover { background: #FFFFFF; }
+  .zoom-btn:focus-visible { outline: 2px solid #0B7285; outline-offset: 1px; }
+  .zoom-label {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    color: #1B3A4B;
+    min-width: 2.4rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
   .diagram-scroll {
-    overflow-x: auto;
+    overflow: auto;
+    max-height: 60vh;
     padding: 1.25rem 1rem 1.5rem;
   }
   .diagram-scroll pre.mermaid {
@@ -307,9 +346,17 @@
       question stays flat as the environment grows; querying live wouldn't.
     </p>
     <div class="diagram-panel">
-      <div class="diagram-caption">fig. 1 — ingestion pipeline</div>
+      <div class="diagram-caption">
+        <span>fig. 1 — ingestion pipeline</span>
+        <span class="zoom-controls">
+          <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig1" aria-label="Zoom out fig. 1">−</button>
+          <span class="zoom-label" data-target-label="mermaid-fig1">100%</span>
+          <button type="button" class="zoom-btn" data-zoom="in" data-target="mermaid-fig1" aria-label="Zoom in fig. 1">+</button>
+          <button type="button" class="zoom-btn" data-zoom="reset" data-target="mermaid-fig1" aria-label="Reset zoom fig. 1">⟲</button>
+        </span>
+      </div>
       <div class="diagram-scroll">
-<pre class="mermaid">
+<pre class="mermaid" id="mermaid-fig1">
 %%{init: {'theme':'base', 'themeVariables': {
   'background': 'transparent',
   'actorBkg': '#EAF2F6',
@@ -360,9 +407,17 @@ sequenceDiagram
       <code>mwaa_client.py</code> does today.
     </p>
     <div class="diagram-panel">
-      <div class="diagram-caption">fig. 2 — question → answer</div>
+      <div class="diagram-caption">
+        <span>fig. 2 — question → answer</span>
+        <span class="zoom-controls">
+          <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig2" aria-label="Zoom out fig. 2">−</button>
+          <span class="zoom-label" data-target-label="mermaid-fig2">100%</span>
+          <button type="button" class="zoom-btn" data-zoom="in" data-target="mermaid-fig2" aria-label="Zoom in fig. 2">+</button>
+          <button type="button" class="zoom-btn" data-zoom="reset" data-target="mermaid-fig2" aria-label="Reset zoom fig. 2">⟲</button>
+        </span>
+      </div>
       <div class="diagram-scroll">
-<pre class="mermaid">
+<pre class="mermaid" id="mermaid-fig2">
 %%{init: {'theme':'base', 'themeVariables': {
   'background': 'transparent',
   'actorBkg': '#EAF2F6',
@@ -524,9 +579,17 @@ sequenceDiagram
       </div>
     </div>
     <div class="diagram-panel">
-      <div class="diagram-caption">fig. 3 — validation gates and failure paths</div>
+      <div class="diagram-caption">
+        <span>fig. 3 — validation gates and failure paths</span>
+        <span class="zoom-controls">
+          <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig3" aria-label="Zoom out fig. 3">−</button>
+          <span class="zoom-label" data-target-label="mermaid-fig3">80%</span>
+          <button type="button" class="zoom-btn" data-zoom="in" data-target="mermaid-fig3" aria-label="Zoom in fig. 3">+</button>
+          <button type="button" class="zoom-btn" data-zoom="reset" data-target="mermaid-fig3" aria-label="Reset zoom fig. 3">⟲</button>
+        </span>
+      </div>
       <div class="diagram-scroll">
-<pre class="mermaid">
+<pre class="mermaid" id="mermaid-fig3" data-initial-zoom="0.8">
 %%{init: {'theme':'base', 'themeVariables': {
   'background': 'transparent',
   'primaryColor': '#EAF2F6',
@@ -610,6 +673,39 @@ flowchart TD
 
 <script>
   mermaid.initialize({ startOnLoad: true });
+
+  (function () {
+    var STEP = 0.15, MIN = 0.4, MAX = 2.2;
+    var zoom = {};
+
+    document.querySelectorAll('pre.mermaid[id]').forEach(function (el) {
+      var initial = parseFloat(el.getAttribute('data-initial-zoom')) || 1;
+      zoom[el.id] = initial;
+      el.style.zoom = initial;
+    });
+
+    function apply(id) {
+      var el = document.getElementById(id);
+      var label = document.querySelector('.zoom-label[data-target-label="' + id + '"]');
+      var z = zoom[id];
+      if (el) el.style.zoom = z;
+      if (label) label.textContent = Math.round(z * 100) + '%';
+    }
+
+    document.querySelectorAll('.zoom-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-target');
+        var action = btn.getAttribute('data-zoom');
+        var base = parseFloat(document.getElementById(id).getAttribute('data-initial-zoom')) || 1;
+        var z = zoom[id] || base;
+        if (action === 'in') z = Math.min(MAX, +(z + STEP).toFixed(2));
+        else if (action === 'out') z = Math.max(MIN, +(z - STEP).toFixed(2));
+        else z = base;
+        zoom[id] = z;
+        apply(id);
+      });
+    });
+  })();
 </script>
 
 </body>
