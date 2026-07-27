@@ -40,6 +40,77 @@ calls that hit AWS are wrapped so an unexpected failure (throttling, a
 denied private webserver) surfaces to Claude as a `ModelRetry` instead of
 crashing the whole request.
 
+## Live example: question to answer
+
+This is a real trace against the deployed instance (see
+[DEPLOY.md](DEPLOY.md)) - `airflow-2-11`, whose webserver is
+`PRIVATE_ONLY`, so this specific run also exercises the SSM proxy path.
+Question: **"why did sample_4_task_dag_with_failure fail?"**
+
+1. **Browser → App Runner.** `chat.html`'s JS sends
+   `POST /api/chat {"message": "...", "session_id": null}` with an HTTP
+   Basic Auth header, over the internet to App Runner's public HTTPS
+   endpoint - no VPN or VPC access needed to reach the app itself.
+2. **Auth gate.** FastAPI's `require_auth` dependency checks the header
+   against `CHAT_USERNAME`/`CHAT_PASSWORD` (injected as env vars from
+   Secrets Manager at container start). Wrong or missing credentials stop
+   here with a `401`, before any AWS or Anthropic call happens.
+3. **Session lookup.** No `session_id` was sent, so `webapp.py` mints a
+   new UUID and looks it up in the in-memory `_sessions` dict - empty,
+   this is the first message, so `message_history=None`.
+4. **Into the agent loop.** `_agent.run_sync(message, deps=_deps,
+   message_history=None)` hands off to PydanticAI, which sends Claude the
+   system prompt, the question, and JSON schemas for all 8 tools plus the
+   synthetic `final_result` tool (built from `Union[FailureDiagnosis,
+   FailureSummary]`).
+5. **Claude's first tool call.** It reads this as a root-cause question
+   about one named DAG and calls
+   `get_dag_runs(dag_id="sample_4_task_dag_with_failure", state="failed")`.
+6. **Tool executes, hits the private webserver.** `MwaaClient.get_dag_runs`
+   checks its 60s cache (miss), calls `self.rest(...)`, which tries
+   `mwaa.invoke_rest_api()` directly - denied
+   (`AccessDeniedException: Private webserver...`) - and falls back to
+   `_rest_via_ssm()`: `ssm.send_command()` runs
+   `aws mwaa invoke-rest-api ...` on the proxy instance
+   (`i-REDACTED`, inside the environment's VPC), polls
+   `get_command_invocation` until it finishes, and parses the result.
+   Comes back empty - **no runs at all**, not even a failed one.
+7. **Claude asks two more questions to be sure**, the same tool-call →
+   AWS/SSM → result → `tool_result` round trip each time:
+   `get_failed_dags_summary()` (confirms 0 failed DAGs environment-wide)
+   and `list_dags()` (shows the DAG is `is_paused: true`, schedule "Never,
+   external triggers only" - explains *why* there'd be no runs).
+8. **Enough evidence, final answer.** Claude emits `tool_use
+   final_result(...)` shaped as `FailureDiagnosis` (not `FailureSummary` -
+   this was a named-DAG question). PydanticAI validates it against the
+   Union schema and accepts it.
+9. **Session saved, response sent.** `result.all_messages()` is stored in
+   `_sessions[session_id]` so a follow-up like "what about the other DAGs?"
+   has this context. FastAPI returns the JSON below to the browser, which
+   renders it via `renderDiagnosis()`.
+
+The actual response:
+
+```json
+{
+  "summary": "The DAG 'sample_4_task_dag_with_failure' exists in the environment but has no run history. It is currently paused with no schedule (manual trigger only), so it has never been executed or all run records have been cleared from the metadata database.",
+  "root_cause": "The DAG 'sample_4_task_dag_with_failure' has not been executed yet, or all historical run records have been cleared. There are no DAG runs (successful or failed) in the metadata database.",
+  "evidence": "DAG exists in the environment with status 'paused', but get_dag_runs returned 0 runs. The environment-wide failed DAG summary shows 0 failed DAGs and 0 failed runs. No import errors detected for this DAG.",
+  "recommendations": [
+    "Verify if the DAG has ever been triggered - it is currently paused and set to 'Never, external triggers only' schedule, so it won't run automatically",
+    "Unpause the DAG and manually trigger it if you want to test the failure scenario",
+    "Check if DAG run metadata was recently cleaned up - there is a 'clean_mwaa_metadata_specific_tables' DAG in this environment that may have cleared historical run data",
+    "If the DAG should have run already, check the Airflow scheduler logs to see if there were issues preventing the DAG from being scheduled"
+  ]
+}
+```
+
+Notice recommendation 3 - Claude noticed `clean_mwaa_metadata_specific_tables`
+in the DAG list from step 7 and connected it to the missing run history
+unprompted. Nothing in the system prompt mentions that DAG by name; that's
+the model reasoning over what the tools actually returned, not a
+scripted response.
+
 ## Requirements
 
 - Python 3.10+
