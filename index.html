@@ -590,7 +590,7 @@ sequenceDiagram
       </div>
       <div class="diagram-scroll">
 <pre class="mermaid" id="mermaid-fig3" data-initial-zoom="0.8">
-%%{init: {'theme':'base', 'themeVariables': {
+%%{init: {'theme':'base', 'flowchart': {'htmlLabels': false, 'useMaxWidth': false, 'padding': 14}, 'themeVariables': {
   'background': 'transparent',
   'primaryColor': '#EAF2F6',
   'primaryBorderColor': '#1B3A4B',
@@ -598,24 +598,23 @@ sequenceDiagram
   'lineColor': '#1B3A4B',
   'secondaryColor': '#D8E8EC',
   'tertiaryColor': '#FCEFD9',
-  'fontFamily': 'ui-monospace, SF Mono, Consolas, monospace',
-  'fontSize': '13px'
+  'fontSize': '14px'
 }}}%%
 flowchart TD
-    START([User question]) --> PV{Pre-validation<br/>auth · env scope · input shape}
-    PV -->|fail| REJECT([Typed error returned<br/>no model call made])
-    PV -->|pass| CTX[Attach message_history<br/>if this is a follow-up]
-    CTX --> DECIDE{Claude: call a tool,<br/>or answer?}
-    DECIDE -->|tool_use| EXEC[Execute tool<br/>MwaaClient today · store once built]
-    EXEC -->|success| TRESULT[tool_result fed back to Claude]
-    EXEC -->|exception| CAUGHT[Caught at the tool boundary<br/>returned as text, not a crash]
+    START([User question]) --> PV{Pre-validated?}
+    PV -->|fail| REJECT([Rejected: typed error])
+    PV -->|pass| CTX[Load history if follow-up]
+    CTX --> DECIDE{Tool or answer?}
+    DECIDE -->|tool_use| EXEC[Execute tool]
+    EXEC -->|success| TRESULT[tool_result to Claude]
+    EXEC -->|exception| CAUGHT[Caught, sent as text]
     CAUGHT --> TRESULT
     TRESULT --> DECIDE
-    DECIDE -->|final_result| PDV{Post-validation<br/>Pydantic schema check}
-    PDV -->|invalid, retries left| DECIDE
-    PDV -->|invalid, 0 retries left| TYPEDERR([Typed error to caller])
-    PDV -->|valid| ANSWER([Structured answer returned])
-    ANSWER -.->|next question, same thread| START
+    DECIDE -->|final_result| PDV{Schema valid?}
+    PDV -->|no, retry left| DECIDE
+    PDV -->|no, retries done| TYPEDERR([Typed error])
+    PDV -->|yes| ANSWER([Structured answer])
+    ANSWER -.->|next question| START
 
     classDef fail fill:#F7DCD6,stroke:#B5432E,color:#5C2418;
     classDef ok fill:#DCEFE1,stroke:#2F8F5B,color:#1C4A30;
@@ -672,40 +671,57 @@ flowchart TD
 </div>
 
 <script>
-  mermaid.initialize({ startOnLoad: true });
+  mermaid.initialize({ startOnLoad: false });
 
-  (function () {
+  mermaid.run({ querySelector: '.mermaid' }).then(function () {
     var STEP = 0.15, MIN = 0.4, MAX = 2.2;
-    var zoom = {};
+    var state = {};
+
+    function naturalSize(svg) {
+      var vb = svg.viewBox && svg.viewBox.baseVal;
+      if (vb && vb.width && vb.height) return { w: vb.width, h: vb.height };
+      var r = svg.getBoundingClientRect();
+      return { w: r.width, h: r.height };
+    }
+
+    function updateLabel(id) {
+      var label = document.querySelector('.zoom-label[data-target-label="' + id + '"]');
+      if (label) label.textContent = Math.round(state[id].zoom * 100) + '%';
+    }
+
+    function applySize(id) {
+      var el = document.getElementById(id);
+      var svg = el && el.querySelector('svg');
+      var s = state[id];
+      if (!svg || !s) return;
+      svg.style.width = (s.base.w * s.zoom) + 'px';
+      svg.style.height = (s.base.h * s.zoom) + 'px';
+      updateLabel(id);
+    }
 
     document.querySelectorAll('pre.mermaid[id]').forEach(function (el) {
+      var svg = el.querySelector('svg');
+      if (!svg) return;
+      svg.style.maxWidth = 'none';
       var initial = parseFloat(el.getAttribute('data-initial-zoom')) || 1;
-      zoom[el.id] = initial;
-      el.style.zoom = initial;
+      state[el.id] = { base: naturalSize(svg), zoom: initial };
+      applySize(el.id);
     });
-
-    function apply(id) {
-      var el = document.getElementById(id);
-      var label = document.querySelector('.zoom-label[data-target-label="' + id + '"]');
-      var z = zoom[id];
-      if (el) el.style.zoom = z;
-      if (label) label.textContent = Math.round(z * 100) + '%';
-    }
 
     document.querySelectorAll('.zoom-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var id = btn.getAttribute('data-target');
+        var s = state[id];
+        if (!s) return;
         var action = btn.getAttribute('data-zoom');
-        var base = parseFloat(document.getElementById(id).getAttribute('data-initial-zoom')) || 1;
-        var z = zoom[id] || base;
-        if (action === 'in') z = Math.min(MAX, +(z + STEP).toFixed(2));
-        else if (action === 'out') z = Math.max(MIN, +(z - STEP).toFixed(2));
-        else z = base;
-        zoom[id] = z;
-        apply(id);
+        var initial = parseFloat(document.getElementById(id).getAttribute('data-initial-zoom')) || 1;
+        if (action === 'in') s.zoom = Math.min(MAX, +(s.zoom + STEP).toFixed(2));
+        else if (action === 'out') s.zoom = Math.max(MIN, +(s.zoom - STEP).toFixed(2));
+        else s.zoom = initial;
+        applySize(id);
       });
     });
-  })();
+  });
 </script>
 
 </body>
