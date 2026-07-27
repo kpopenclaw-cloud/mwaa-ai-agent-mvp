@@ -17,7 +17,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from mwaa_agent.agent import MwaaDeps, build_agent
+from mwaa_agent.agent import FailureDiagnosis, FailureSummary, MwaaDeps, build_agent
 from mwaa_agent.mwaa_client import MwaaClient
 
 load_dotenv()
@@ -26,6 +26,23 @@ load_dotenv()
 def print_diagnosis(d) -> None:
     print("\n" + "=" * 70)
     print(f"SUMMARY: {d.summary}\n")
+
+    if isinstance(d, FailureSummary):
+        print(f"Scope:      {d.scope}")
+        if d.environments_checked:
+            print(f"Environments checked: {', '.join(d.environments_checked)}")
+        print(f"Total failed DAGs: {d.total_failed_dags}")
+        print(f"Total failed runs: {d.total_failed_runs}")
+        if d.failed_dags:
+            print("\nBY DAG:")
+            for fd in d.failed_dags:
+                env_prefix = f"[{fd.environment}] " if fd.environment else ""
+                latest = f" (latest: {fd.latest_failure})" if fd.latest_failure else ""
+                print(f"  {env_prefix}{fd.dag_id}: {fd.failed_runs} failed run(s){latest}")
+        print("=" * 70 + "\n")
+        return
+
+    assert isinstance(d, FailureDiagnosis)
     if d.dag_id:
         print(f"DAG:        {d.dag_id}")
     if d.dag_run_id:

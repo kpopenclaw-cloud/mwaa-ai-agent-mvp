@@ -28,22 +28,48 @@ import boto3
 from botocore.exceptions import ClientError
 
 
+class _TTLCache:
+    """Minimal in-process cache with per-key expiry. Short-lived by design:
+    this exists to absorb repeat questions within one chat session (e.g.
+    "how many failed" asked twice in a row), not as a durable store."""
+
+    def __init__(self, ttl_seconds: float = 60.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._store: dict[str, tuple[float, Any]] = {}
+
+    def get(self, key: str) -> Any:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if time.monotonic() > expires_at:
+            del self._store[key]
+            return None
+        return value
+
+    def set(self, key: str, value: Any) -> None:
+        self._store[key] = (time.monotonic() + self.ttl_seconds, value)
+
+
 @dataclass
 class MwaaClient:
     environment_name: str
     region: str = "us-east-1"
     profile: Optional[str] = None
     ssm_proxy_instance_id: Optional[str] = None
+    cache_ttl_seconds: float = 60.0
     _session: Any = field(init=False, repr=False, default=None)
     _mwaa: Any = field(init=False, repr=False, default=None)
     _logs: Any = field(init=False, repr=False, default=None)
     _ssm: Any = field(init=False, repr=False, default=None)
+    _cache: Any = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
         self._session = boto3.Session(profile_name=self.profile, region_name=self.region)
         self._mwaa = self._session.client("mwaa")
         self._logs = self._session.client("logs")
         self._ssm = self._session.client("ssm")
+        self._cache = _TTLCache(ttl_seconds=self.cache_ttl_seconds)
 
     # ------------------------------------------------------------------ #
     # Core Airflow REST API proxy
@@ -145,11 +171,16 @@ class MwaaClient:
         }
 
     def list_dags(self, only_active: bool = True, limit: int = 100) -> list[dict[str, Any]]:
+        cache_key = f"list_dags:{only_active}:{limit}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         query: dict[str, Any] = {"limit": limit}
         if only_active:
             query["only_active"] = "true"
         data = self.rest("/dags", query=query)
-        return [
+        result = [
             {
                 "dag_id": d.get("dag_id"),
                 "is_paused": d.get("is_paused"),
@@ -159,9 +190,11 @@ class MwaaClient:
             }
             for d in data.get("dags", [])
         ]
+        self._cache.set(cache_key, result)
+        return result
 
     def get_import_errors(self) -> list[dict[str, Any]]:
-        """DAG parsing errors — a common reason a DAG 'disappears' or never runs."""
+        """DAG parsing errors - a common reason a DAG 'disappears' or never runs."""
         data = self.rest("/importErrors")
         return data.get("import_errors", [])
 
@@ -174,11 +207,16 @@ class MwaaClient:
         state: Optional[str] = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
+        cache_key = f"get_dag_runs:{dag_id}:{state}:{limit}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         query: dict[str, Any] = {"limit": limit, "order_by": "-execution_date"}
         if state:
             query["state"] = state
         data = self.rest(f"/dags/{dag_id}/dagRuns", query=query)
-        return [
+        result = [
             {
                 "dag_id": r.get("dag_id"),
                 "dag_run_id": r.get("dag_run_id"),
@@ -191,6 +229,41 @@ class MwaaClient:
             }
             for r in data.get("dag_runs", [])
         ]
+        self._cache.set(cache_key, result)
+        return result
+
+    def get_failed_dags_summary(self, limit: int = 100) -> dict[str, Any]:
+        """Aggregate count of DAGs/runs currently failed in THIS environment.
+
+        Purpose-built for "how many dags/tasks failed" style questions so
+        the model doesn't need to call list_dags + get_dag_runs and count
+        itself - one bounded call instead of an unbounded fan-out."""
+        cache_key = f"get_failed_dags_summary:{limit}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        runs = self.get_dag_runs(dag_id="~", state="failed", limit=limit)
+        by_dag: dict[str, int] = {}
+        latest: dict[str, str] = {}
+        for r in runs:
+            dag_id = r.get("dag_id") or "unknown"
+            by_dag[dag_id] = by_dag.get(dag_id, 0) + 1
+            ts = r.get("start_date") or r.get("logical_date") or ""
+            if ts and ts > latest.get(dag_id, ""):
+                latest[dag_id] = ts
+
+        result = {
+            "environment": self.environment_name,
+            "failed_dag_count": len(by_dag),
+            "failed_run_count": len(runs),
+            "failed_dags": [
+                {"dag_id": d, "failed_runs": c, "latest_failure": latest.get(d)}
+                for d, c in sorted(by_dag.items(), key=lambda kv: -kv[1])
+            ],
+        }
+        self._cache.set(cache_key, result)
+        return result
 
     def get_task_instances(
         self, dag_id: str, dag_run_id: str, state: Optional[str] = None
@@ -253,7 +326,7 @@ class MwaaClient:
                 limit=50,
             )["logStreams"]
         except self._logs.exceptions.ResourceNotFoundException:
-            return f"(no CloudWatch log group '{group}' found — task logging may be disabled)"
+            return f"(no CloudWatch log group '{group}' found - task logging may be disabled)"
 
         candidates = [
             s["logStreamName"]
@@ -284,3 +357,67 @@ def _extract_error_context(log_text: str, max_chars: int) -> str:
         return f"...(log truncated, showing first error context)...\n{chunk}"
 
     return f"...(log truncated, showing tail)...\n{log_text[-max_chars:]}"
+
+
+# ---------------------------------------------------------------------- #
+# Cross-environment aggregation ("how many dags failed across all envs")
+# ---------------------------------------------------------------------- #
+_cross_env_cache = _TTLCache(ttl_seconds=60.0)
+
+
+def list_environment_names(region: str = "us-east-1", profile: Optional[str] = None) -> list[str]:
+    """List every MWAA environment name in this account/region."""
+    session = boto3.Session(profile_name=profile, region_name=region)
+    mwaa = session.client("mwaa")
+    names: list[str] = []
+    next_token: Optional[str] = None
+    while True:
+        kwargs: dict[str, Any] = {"NextToken": next_token} if next_token else {}
+        resp = mwaa.list_environments(**kwargs)
+        names.extend(resp.get("Environments", []))
+        next_token = resp.get("NextToken")
+        if not next_token:
+            break
+    return names
+
+
+def get_all_environments_failure_summary(
+    region: str = "us-east-1",
+    profile: Optional[str] = None,
+    ssm_proxy_instance_id: Optional[str] = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Aggregate failed-DAG counts across every MWAA environment in this
+    account/region - for "how many dags failed across all environments"
+    style questions. One environment failing (e.g. a private webserver with
+    no reachable proxy) doesn't block the others; it's reported inline
+    instead. Cached briefly since this fans out to N environments."""
+    cache_key = f"all_envs:{region}:{profile}:{ssm_proxy_instance_id}:{limit}"
+    cached = _cross_env_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    names = list_environment_names(region=region, profile=profile)
+    per_env: list[dict[str, Any]] = []
+    total_failed_dags = 0
+    total_failed_runs = 0
+    for name in names:
+        try:
+            client = MwaaClient(
+                name, region=region, profile=profile, ssm_proxy_instance_id=ssm_proxy_instance_id
+            )
+            summary = client.get_failed_dags_summary(limit=limit)
+            per_env.append(summary)
+            total_failed_dags += summary["failed_dag_count"]
+            total_failed_runs += summary["failed_run_count"]
+        except Exception as e:
+            per_env.append({"environment": name, "error": str(e)})
+
+    result = {
+        "environments_checked": names,
+        "total_failed_dags": total_failed_dags,
+        "total_failed_runs": total_failed_runs,
+        "by_environment": per_env,
+    }
+    _cross_env_cache.set(cache_key, result)
+    return result
