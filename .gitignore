@@ -1,11 +1,7 @@
-.htaccess
-css.php
-rpc/
-sites/site*/admin/
-sites/site*/private/
-sites/site*/public/admin/
-sites/site*/public/setup/
-sites/site*/public/theme/
+.env
+.venv/
+__pycache__/
+*.pyc
 textpattern/
 HISTORY.txt
 README.txt
