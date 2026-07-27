@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MWAA Agent — Sequence Design</title>
+<title>MWAA Agent - Sequence Design</title>
 <meta name="description" content="Production sequence diagram for a Claude-powered MWAA agent handling both aggregate failure counts and root-cause diagnosis." />
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
@@ -299,11 +299,11 @@
 <div class="page">
 
   <header class="hero">
-    <div class="eyebrow">Architecture — Sequence Design</div>
+    <div class="eyebrow">Architecture - Sequence Design</div>
     <h1>MWAA Diagnostic Agent, Production Sequence</h1>
     <p class="lede">
       Extends the current CLI agent into something you can actually have a
-      conversation with — ask <em>how many DAGs failed in this environment</em>,
+      conversation with - ask <em>how many DAGs failed in this environment</em>,
       <em>how many failed across every environment today</em>, or
       <em>why this particular DAG failed</em>, then keep asking follow-ups in
       the same thread. All of it served behind an API, cached, and still
@@ -319,9 +319,9 @@
     </p>
     <div class="legend">
       <div class="legend-item"><span class="legend-name">User</span><span class="legend-role">Asks a question in plain English.</span></div>
-      <div class="legend-item"><span class="legend-name">Client</span><span class="legend-role">Slack app, web console, or CLI — whatever surface took the question.</span></div>
+      <div class="legend-item"><span class="legend-name">Client</span><span class="legend-role">Slack app, web console, or CLI - whatever surface took the question.</span></div>
       <div class="legend-item"><span class="legend-name">API + Auth</span><span class="legend-role">Authenticates the caller, rate-limits, routes to the orchestrator.</span></div>
-      <div class="legend-item"><span class="legend-name">Agent Orchestrator</span><span class="legend-role">Runs the tool-call loop and leans on Pydantic to validate every tool argument and the final answer against a schema — malformed output gets caught and retried before it ever reaches you.</span></div>
+      <div class="legend-item"><span class="legend-name">Agent Orchestrator</span><span class="legend-role">Runs the tool-call loop and leans on Pydantic to validate every tool argument and the final answer against a schema - malformed output gets caught and retried before it ever reaches you.</span></div>
       <div class="legend-item"><span class="legend-name">Claude</span><span class="legend-role">Decides which tool(s) to call and drafts the final structured answer.</span></div>
       <div class="legend-item"><span class="legend-name">Tool Layer</span><span class="legend-role">The @agent.tool functions, bound to a live MwaaClient.</span></div>
       <div class="legend-item"><span class="legend-name">Cache<span class="pill-proposed">proposed</span></span><span class="legend-role">Short-lived (~60s) read-through cache for repeat count queries. Not in <code>mwaa_client.py</code> yet.</span></div>
@@ -335,19 +335,19 @@
 
   <section>
     <div class="section-head">
-      <h2>Background ingestion — continuous</h2>
+      <h2>Background ingestion - continuous</h2>
       <span class="pill">recommended for efficiency</span>
     </div>
     <p class="section-intro">
       This is the path worth defaulting to for anything counting-shaped. It runs
-      independently of any user question — every DAG/task state change lands in
-      the store within seconds — so an aggregate question reads one pre-computed
+      independently of any user question - every DAG/task state change lands in
+      the store within seconds - so an aggregate question reads one pre-computed
       row instead of replaying the live Airflow API once per DAG. The cost per
       question stays flat as the environment grows; querying live wouldn't.
     </p>
     <div class="diagram-panel">
       <div class="diagram-caption">
-        <span>fig. 1 — ingestion pipeline</span>
+        <span>fig. 1 - ingestion pipeline</span>
         <span class="zoom-controls">
           <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig1" aria-label="Zoom out fig. 1">−</button>
           <span class="zoom-label" data-target-label="mermaid-fig1">100%</span>
@@ -383,32 +383,32 @@ sequenceDiagram
     participant Store as Aggregation Store
 
     Env-->>EB: dag_run / task_instance state change
-    Note over Env,EB: event-driven — no polling, so idle environments cost nothing
+    Note over Env,EB: event-driven - no polling, so idle environments cost nothing
     EB->>Ingest: invoke(event)
     Ingest->>REST: fetch run + task detail
     REST-->>Ingest: run/task payload
     Ingest->>Store: upsert counts (env, dag_id, date, state)
-    Note over Store: pre-aggregated — one indexed read replaces N live calls per question
+    Note over Store: pre-aggregated - one indexed read replaces N live calls per question
 </pre>
       </div>
     </div>
   </section>
 
   <section>
-    <h2>Query flow — on-demand</h2>
+    <h2>Query flow - on-demand</h2>
     <p class="section-intro">
       One loop, two branches. Claude picks the branch by reading intent from the
-      question — a counting tool for aggregates, the existing drill-down chain
+      question - a counting tool for aggregates, the existing drill-down chain
       for root cause. Both still exit through a schema-validated result.
-      Bracketed text below is a worked example, not part of the protocol —
+      Bracketed text below is a worked example, not part of the protocol -
       it's what the arrow actually carries for one real question. Dashed
       arrows through <em>Cache</em> and <em>Aggregation Store</em> mark the
-      one leg that's still proposed (see fig. 1) — everything solid is what
+      one leg that's still proposed (see fig. 1) - everything solid is what
       <code>mwaa_client.py</code> does today.
     </p>
     <div class="diagram-panel">
       <div class="diagram-caption">
-        <span>fig. 2 — question → answer</span>
+        <span>fig. 2 - question → answer</span>
         <span class="zoom-controls">
           <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig2" aria-label="Zoom out fig. 2">−</button>
           <span class="zoom-label" data-target-label="mermaid-fig2">100%</span>
@@ -456,27 +456,27 @@ sequenceDiagram
     API->>API: authenticate + authorize
     API->>Agent: run_sync(question, deps)
     Agent->>Claude: system prompt + question + tool schemas
-    Claude-->>Agent: tool_use(...) [picks get_failure_summary or get_dag_runs]
+    Claude-->>Agent: tool_use(...) [picks get_failure_summary (proposed) or get_dag_runs (shipped)]
     Note over Agent,Claude: branch chosen from question intent, not a fixed switch
 
-    alt "how many dags/tasks failed" — aggregate [e.g. "how many dags failed in airflow-2-11 today?"]
-        Agent->>Tools: get_failure_summary(env, scope, since)
+    alt "how many dags/tasks failed" - aggregate [e.g. "how many dags failed in airflow-2-11 today?"]
+        Agent->>Tools: get_failure_summary(env, scope, since) - proposed, not in agent.py yet
         Tools-->>Cache: lookup(key)
         alt cache hit (proposed)
             Cache-->>Tools: cached counts
-        else cache miss — store not built yet
+        else cache miss - store not built yet
             Tools-->>Store: query aggregated counts
             Store-->>Tools: counts by dag / task / state
             Tools-->>Cache: write-through (ttl 60s)
-            Note over Tools,Store: proposed enhancement — today this falls<br/>through to live MwaaClient calls instead<br/>(list_dags + get_dag_runs), see fig. 1
+            Note over Tools,Store: proposed enhancement - today this falls<br/>through to live MwaaClient calls instead<br/>(list_dags + get_dag_runs), see fig. 1
         end
         Tools-->>Agent: summary JSON [e.g. {"env":"airflow-2-11","failed_dags":3}]
         Agent->>Claude: tool_result(summary)
-    else "why did dag X fail" — root cause [e.g. "why did daily_sales_etl fail?"]
+    else "why did dag X fail" - root cause [e.g. "why did daily_sales_etl fail?"]
         Agent->>Tools: get_dag_runs(dag_id, state=failed)
         Tools->>REST: GET /dags/{id}/dagRuns
         REST-->>Tools: runs
-        Tools-->>Agent: runs JSON [e.g. 1 failed run — scheduled__2026-07-24]
+        Tools-->>Agent: runs JSON [e.g. 1 failed run - scheduled__2026-07-24]
         Agent->>Claude: tool_result(runs)
         Claude-->>Agent: tool_use get_task_instances(run_id)
         Agent->>Tools: get_task_instances(run_id)
@@ -487,7 +487,7 @@ sequenceDiagram
         Claude-->>Agent: tool_use get_task_log(task_id, try_number)
         Agent->>Tools: get_task_log(task_id, try_number)
         Tools->>REST: GET .../logs/{try_number}
-        alt private webserver — access denied
+        alt private webserver - access denied
             REST-->>Tools: AccessDeniedException
             Tools->>Proxy: ssm send_command(aws mwaa invoke-rest-api)
             Proxy->>REST: invoke-rest-api (from inside VPC)
@@ -502,10 +502,10 @@ sequenceDiagram
         Agent->>Claude: tool_result(log excerpt)
     end
 
-    Claude-->>Agent: tool_use final_result(schema) [FailureDiagnosis or FailureSummary]
+    Claude-->>Agent: tool_use final_result(schema) [FailureDiagnosis (shipped) or FailureSummary (proposed)]
     Agent-->>API: validated structured output
     API-->>Client: formatted response
-    Client-->>User: answer [e.g. "airflow-2-11 had 3 DAG failures today — ..."]
+    Client-->>User: answer [e.g. "airflow-2-11 had 3 DAG failures today - ..."]
 </pre>
       </div>
     </div>
@@ -513,12 +513,12 @@ sequenceDiagram
 
   <section>
     <div class="section-head">
-      <h2>Request lifecycle — model, tools, follow-ups, failures</h2>
+      <h2>Request lifecycle - model, tools, follow-ups, failures</h2>
       <span class="pill">where every gate lives</span>
     </div>
     <p class="section-intro">
       Fig. 2 shows the two question shapes; this is the mechanics underneath
-      both of them — what the model is actually deciding turn by turn, where a
+      both of them - what the model is actually deciding turn by turn, where a
       question can get rejected before it costs anything, and what happens
       when a step fails instead of succeeding.
     </p>
@@ -526,7 +526,7 @@ sequenceDiagram
       <div class="note">
         <div class="note-body"><b>How the model decides.</b> Claude sees the
         system prompt, the conversation so far, and a JSON schema for every
-        registered tool — the real tools plus a synthetic <code>final_result</code>
+        registered tool - the real tools plus a synthetic <code>final_result</code>
         tool generated from the output type. Each turn it either calls a tool
         (or several, in parallel) or emits <code>final_result</code>. There's
         no hardcoded call order in the code; the system prompt's suggested
@@ -536,7 +536,7 @@ sequenceDiagram
       <div class="note">
         <div class="note-body"><b>How tool calling happens.</b> Each
         <code>@agent.tool</code> function's parameters become part of Claude's
-        request as a schema generated straight from the Python type hints —
+        request as a schema generated straight from the Python type hints -
         nothing hand-written to keep in sync. When Claude emits a tool call,
         the orchestrator matches it to the real function, injects the live
         dependency (<code>MwaaClient</code> today, the aggregation store once
@@ -548,39 +548,45 @@ sequenceDiagram
         <code>message_history</code> between questions in one session and
         passes it back in on the next call, so "what about yesterday?" doesn't
         need to re-establish which DAG or environment you meant. Memory isn't
-        a shortcut around validation, though — every new question, follow-up
+        a shortcut around validation, though - every new question, follow-up
         or not, re-enters at the pre-validation gate below.</div>
       </div>
       <div class="note">
         <div class="note-body"><b>Failure scenarios.</b> Three distinct
-        kinds, three distinct handlers. A tool raising — throttling, a denied
-        private webserver, a timed-out proxy call — is caught at the tool
-        boundary and handed back to Claude as text, so it can say the evidence
-        was inconclusive instead of the whole request dying. A final answer
-        that fails schema validation triggers an automatic retry, up to twice.
-        A request rejected at pre-validation never reaches the model at all —
-        the cheapest failure is the one that never spends a token.</div>
+        kinds, and today only one of them is actually handled. A final answer
+        that fails schema validation triggers an automatic retry, up to
+        twice - that part is real, it's PydanticAI's built-in behavior. A
+        request rejected at pre-validation never reaches the model at all -
+        real once that layer exists. But a tool raising today (throttling, a
+        denied private webserver, a timed-out proxy call) is <b>not</b>
+        caught anywhere - PydanticAI only intercepts <code>ValidationError</code>
+        and a tool-raised <code>ModelRetry</code>, neither of which the six
+        tools in <code>agent.py</code> use. A raw <code>boto3</code> exception
+        today crashes the whole request. Wrapping each tool's AWS calls to
+        catch expected failures and re-raise as <code>ModelRetry(...)</code>
+        (proposed) is what would make "caught, sent as text" in fig. 3
+        true instead of aspirational.</div>
       </div>
       <div class="note">
-        <div class="note-body"><b>Pre-validation — before the model runs.</b>
+        <div class="note-body"><b>Pre-validation - before the model runs.</b>
         Belongs at the API + Auth layer, not inside the agent: is the caller
         authenticated, is the requested environment one they're scoped to see,
         is the question non-empty and under a length cap. Plain application
-        code guarding cost and access — never something the model is trusted
+        code guarding cost and access - never something the model is trusted
         to enforce on itself.</div>
       </div>
       <div class="note">
-        <div class="note-body"><b>Post-validation — after the model answers.</b>
+        <div class="note-body"><b>Post-validation - after the model answers.</b>
         This is Pydantic's job, and it's already in the code today:
         <code>output_type=FailureDiagnosis</code> is the schema Claude's final
         answer must satisfy, checked inside the orchestrator itself before
         anything is returned. A response that doesn't validate is never handed
-        to the caller — it's fed back as a correction and re-attempted.</div>
+        to the caller - it's fed back as a correction and re-attempted.</div>
       </div>
     </div>
     <div class="diagram-panel">
       <div class="diagram-caption">
-        <span>fig. 3 — validation gates and failure paths</span>
+        <span>fig. 3 - validation gates and failure paths</span>
         <span class="zoom-controls">
           <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig3" aria-label="Zoom out fig. 3">−</button>
           <span class="zoom-label" data-target-label="mermaid-fig3">80%</span>
@@ -607,7 +613,7 @@ flowchart TD
     CTX --> DECIDE{Tool or answer?}
     DECIDE -->|tool_use| EXEC[Execute tool]
     EXEC -->|success| TRESULT[tool_result to Claude]
-    EXEC -->|exception| CAUGHT[Caught, sent as text]
+    EXEC -->|exception| CAUGHT[Caught, sent as text - proposed]
     CAUGHT --> TRESULT
     TRESULT --> DECIDE
     DECIDE -->|final_result| PDV{Schema valid?}
@@ -618,8 +624,10 @@ flowchart TD
 
     classDef fail fill:#F7DCD6,stroke:#B5432E,color:#5C2418;
     classDef ok fill:#DCEFE1,stroke:#2F8F5B,color:#1C4A30;
-    class REJECT,TYPEDERR,CAUGHT fail
+    classDef proposed fill:#EAF2F6,stroke:#56666F,stroke-dasharray: 4 3,color:#3A4750;
+    class REJECT,TYPEDERR fail
     class ANSWER ok
+    class CAUGHT proposed
 </pre>
       </div>
     </div>
@@ -641,14 +649,15 @@ flowchart TD
       <div class="note">
         <div class="note-body"><b>Counting and root-cause are different tools,
         not different prompts.</b> <code>get_failure_summary</code>
-        is purpose-built and bounded; the existing three-call drill-down
+        (proposed, not in <code>agent.py</code> yet) would be purpose-built
+        and bounded; the existing three-call drill-down
         (<code>get_dag_runs → get_task_instances → get_task_log</code>)
         stays untouched for narrative diagnosis.</div>
       </div>
       <div class="note">
         <div class="note-body"><b>The SSM proxy only guards the drill-down
         path.</b> The counting path reads from the store, not live Airflow, so
-        it's unaffected by a PRIVATE_ONLY webserver — only root-cause log
+        it's unaffected by a PRIVATE_ONLY webserver - only root-cause log
         fetches need the in-VPC fallback.</div>
       </div>
       <div class="note">
@@ -658,10 +667,10 @@ flowchart TD
       </div>
       <div class="note">
         <div class="note-body"><b>Output stays schema-validated either way.</b>
-        Both branches still exit through the same Pydantic-checked
-        <code>final_result</code> tool — a count-style answer just validates
-        against a leaner <code>FailureSummary</code> model alongside the
-        existing <code>FailureDiagnosis</code>.</div>
+        Both branches would still exit through the same Pydantic-checked
+        <code>final_result</code> tool - a count-style answer would just
+        validate against a leaner <code>FailureSummary</code> model
+        (proposed) alongside the existing, shipped <code>FailureDiagnosis</code>.</div>
       </div>
     </div>
   </section>
