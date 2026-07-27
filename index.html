@@ -675,6 +675,53 @@ flowchart TD
     </div>
   </section>
 
+  <section>
+    <div class="section-head">
+      <h2>Not applied yet - efficiency &amp; long-term accuracy</h2>
+      <span class="pill-proposed" style="margin-left:0;">gaps, not nice-to-haves</span>
+    </div>
+    <p class="section-intro">
+      Found by checking claims on this page against <code>agent.py</code>,
+      <code>mwaa_client.py</code>, and PydanticAI's own source rather than
+      against the earlier design intent. Ranked by actual payoff, not by
+      how interesting each one is.
+    </p>
+    <div class="notes">
+      <div class="note">
+        <div class="note-body"><b>1. Tool failures should raise <code>ModelRetry</code>, not propagate raw.</b>
+        Checked directly in <code>pydantic_ai/_tool_manager.py</code>: it only
+        intercepts <code>ValidationError</code> and a tool-raised
+        <code>ModelRetry</code> - nothing else. None of the six tools in
+        <code>agent.py</code> raise either, so a throttled or denied AWS call
+        today is an unhandled exception that kills the whole request, not the
+        graceful "evidence was inconclusive" fig. 3 implies. The fix is
+        narrow: wrap each tool's AWS call, catch the expected exceptions,
+        re-raise as <code>ModelRetry("...")</code>. Bounded by the same
+        <code>retries=2</code> already set on the agent - a correctness gap,
+        not a hypothetical.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>2. Prompt caching would cut cost on every multi-call chain.</b>
+        The root-cause path alone is three to four tool round trips
+        (<code>get_dag_runs → get_task_instances → get_task_log</code>, plus
+        retries), and each one resends the full system prompt and all six
+        tool schemas - the same ~1-2K static tokens, rebilled every turn.
+        Anthropic's <code>cache_control</code> on that block is a pure
+        efficiency win with no behavior change, and the highest-value one
+        here specifically because this agent is tool-call-heavy by design.</div>
+      </div>
+      <div class="note">
+        <div class="note-body"><b>3. No observability trail exists past a single run's console output.</b>
+        PydanticAI ships instrumentation (<code>instrument=True</code>, OpenTelemetry)
+        that isn't turned on anywhere in this codebase. Without it there's no
+        record of which tool got called with what arguments, how long each
+        step took, or where Claude changed its reasoning - across real usage,
+        over months, as the model or prompt changes. That trail is what
+        "long-term accuracy" actually depends on; right now nothing keeps it.</div>
+      </div>
+    </div>
+  </section>
+
   <footer>mwaa-agent · sequence design · not a deployment diagram</footer>
 
 </div>
