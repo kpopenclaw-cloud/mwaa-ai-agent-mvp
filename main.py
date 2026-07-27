@@ -66,11 +66,11 @@ def main() -> int:
     parser.add_argument("question", nargs="?", help="Question to ask (omit for interactive mode)")
     parser.add_argument("--env", default=os.getenv("MWAA_ENV_NAME"), help="MWAA environment name")
     parser.add_argument("--region", default=os.getenv("AWS_REGION", "us-east-1"))
-    parser.add_argument("--profile", default=os.getenv("AWS_PROFILE"))
+    parser.add_argument("--profile", default=os.getenv("AWS_PROFILE") or None)
     parser.add_argument("--model", default=None, help="PydanticAI model string override")
     parser.add_argument(
         "--ssm-proxy-instance",
-        default=os.getenv("MWAA_SSM_PROXY_INSTANCE_ID"),
+        default=os.getenv("MWAA_SSM_PROXY_INSTANCE_ID") or None,
         help="EC2 instance ID inside the environment's VPC to proxy InvokeRestApi calls "
         "through via SSM Run Command (needed when the webserver is PRIVATE_ONLY)",
     )

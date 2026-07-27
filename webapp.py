@@ -30,9 +30,9 @@ load_dotenv()
 
 ENV_NAME = os.getenv("MWAA_ENV_NAME")
 REGION = os.getenv("AWS_REGION", "us-east-1")
-PROFILE = os.getenv("AWS_PROFILE")
-SSM_PROXY_INSTANCE_ID = os.getenv("MWAA_SSM_PROXY_INSTANCE_ID")
-MODEL = os.getenv("AGENT_MODEL")
+PROFILE = os.getenv("AWS_PROFILE") or None
+SSM_PROXY_INSTANCE_ID = os.getenv("MWAA_SSM_PROXY_INSTANCE_ID") or None
+MODEL = os.getenv("AGENT_MODEL") or None
 CHAT_USERNAME = os.getenv("CHAT_USERNAME")
 CHAT_PASSWORD = os.getenv("CHAT_PASSWORD")
 
