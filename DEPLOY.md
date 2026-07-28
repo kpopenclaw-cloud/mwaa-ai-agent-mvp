@@ -2,22 +2,27 @@
 
 The chat UI (`webapp.py` + `static/chat.html`) is deployed as a container
 on AWS App Runner, in the same AWS account as the MWAA environments it
-queries (`ACCOUNT_ID_REDACTED`, `us-east-1`).
+queries.
 
-**Live URL:** https://REDACTED.us-east-1.awsapprunner.com
-**Login:** HTTP Basic Auth, username `admin`, password in Secrets Manager
-(`mwaa-agent-chat/chat-password` - never committed to this repo).
+**Real values (account ID, live URL, resource ARNs, instance IDs) are
+deliberately not in this file** - this repo is public. They live in
+`DEPLOY.local.md` in this same directory, which is gitignored and never
+leaves your machine. Placeholders below (`<ACCOUNT_ID>`, `<APP_RUNNER_SERVICE_ARN>`,
+etc.) match the variable names `DEPLOY.local.md` fills in.
+
+Login: HTTP Basic Auth, username `admin`, password in Secrets Manager
+(`mwaa-agent-chat/chat-password` - never committed anywhere).
 
 ## What's running
 
-| Resource | Identifier |
+| Resource | What it is |
 |---|---|
-| App Runner service | `arn:aws:apprunner:us-east-1:ACCOUNT_ID_REDACTED:service/mwaa-agent-chat/REDACTED` |
-| ECR repository | `ACCOUNT_ID_REDACTED.dkr.ecr.us-east-1.amazonaws.com/mwaa-agent-chat` |
-| Instance role (what the running app can call) | `arn:aws:iam::ACCOUNT_ID_REDACTED:role/mwaa-agent-chat-instance-role` |
-| ECR access role (build-time image pull only) | `arn:aws:iam::ACCOUNT_ID_REDACTED:role/mwaa-agent-chat-ecr-access` |
-| Secret: Anthropic key | `arn:aws:secretsmanager:us-east-1:ACCOUNT_ID_REDACTED:secret:mwaa-agent-chat/anthropic-api-key-REDACTED` |
-| Secret: chat password | `arn:aws:secretsmanager:us-east-1:ACCOUNT_ID_REDACTED:secret:mwaa-agent-chat/chat-password-REDACTED` |
+| App Runner service | Runs the container, provisions the public HTTPS URL |
+| ECR repository `mwaa-agent-chat` | Private image registry the service pulls from |
+| Instance role `mwaa-agent-chat-instance-role` | What the running app is allowed to call in AWS |
+| ECR access role `mwaa-agent-chat-ecr-access` | Build-time only - lets App Runner pull the image |
+| Secret `mwaa-agent-chat/anthropic-api-key` | Anthropic API key, injected as an env var at container start |
+| Secret `mwaa-agent-chat/chat-password` | Basic Auth password, same mechanism |
 
 Instance configuration: 0.25 vCPU / 0.5 GB, `AutoDeploymentsEnabled: false`
 (pushing a new image does **not** auto-redeploy - see below).
@@ -25,9 +30,9 @@ Instance configuration: 0.25 vCPU / 0.5 GB, `AutoDeploymentsEnabled: false`
 The instance role has no static AWS keys. It's scoped to exactly what the
 app needs: `airflow:InvokeRestApi`/`GetEnvironment`/`ListEnvironments`,
 `logs:DescribeLogStreams`/`GetLogEvents`, `ssm:SendCommand` (only against
-the `AWS-RunShellScript` document and the specific proxy instance
-`i-REDACTED`), `ssm:GetCommandInvocation`, and
-`secretsmanager:GetSecretValue` on just its own two secrets.
+the `AWS-RunShellScript` document and the specific proxy instance),
+`ssm:GetCommandInvocation`, and `secretsmanager:GetSecretValue` on just
+its own two secrets.
 
 ## Cost
 
@@ -42,21 +47,21 @@ asking it questions.
 ```bash
 cd mwaa-ai-agent-mvp
 docker buildx build --platform linux/amd64 \
-  -t ACCOUNT_ID_REDACTED.dkr.ecr.us-east-1.amazonaws.com/mwaa-agent-chat:latest --load .
+  -t <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/mwaa-agent-chat:latest --load .
 
-aws ecr get-login-password --region us-east-1 --profile ACCOUNT_ID_REDACTED_AWSAdministratorAccess \
-  | docker login --username AWS --password-stdin ACCOUNT_ID_REDACTED.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region <REGION> --profile <PROFILE> \
+  | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
 
-docker push ACCOUNT_ID_REDACTED.dkr.ecr.us-east-1.amazonaws.com/mwaa-agent-chat:latest
+docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/mwaa-agent-chat:latest
 
 aws apprunner start-deployment \
-  --service-arn arn:aws:apprunner:us-east-1:ACCOUNT_ID_REDACTED:service/mwaa-agent-chat/REDACTED \
-  --region us-east-1 --profile ACCOUNT_ID_REDACTED_AWSAdministratorAccess
+  --service-arn <APP_RUNNER_SERVICE_ARN> \
+  --region <REGION> --profile <PROFILE>
 ```
 
 `--platform linux/amd64` matters if you're building on Apple Silicon - App
-Runner failed a plain `docker build` image on this account until the
-platform was pinned explicitly (see "Known issues" below).
+Runner failed to start from a plain `docker build` image on this account
+until the platform was pinned explicitly (see "Known issues" below).
 
 ## Changing environment variables or secrets
 
@@ -65,9 +70,9 @@ Plain env vars (`MWAA_ENV_NAME`, `AWS_REGION`, `MWAA_SSM_PROXY_INSTANCE_ID`,
 `ImageConfiguration`. Update via:
 
 ```bash
-aws apprunner update-service --service-arn <service-arn> \
+aws apprunner update-service --service-arn <APP_RUNNER_SERVICE_ARN> \
   --source-configuration file://new-config.json \
-  --region us-east-1 --profile ACCOUNT_ID_REDACTED_AWSAdministratorAccess
+  --region <REGION> --profile <PROFILE>
 ```
 
 To rotate a secret's *value* without touching the service config:
@@ -76,7 +81,7 @@ To rotate a secret's *value* without touching the service config:
 aws secretsmanager put-secret-value \
   --secret-id mwaa-agent-chat/chat-password \
   --secret-string "NEW_PASSWORD" \
-  --region us-east-1 --profile ACCOUNT_ID_REDACTED_AWSAdministratorAccess
+  --region <REGION> --profile <PROFILE>
 ```
 
 New secret values are picked up on the next deployment, not live - run
@@ -104,13 +109,14 @@ New secret values are picked up on the next deployment, not live - run
 ## Tearing down
 
 Nothing here has been torn down - this section is for when you want to.
+Real ARNs/names for these commands are in `DEPLOY.local.md`.
 
 ```bash
-PROFILE=ACCOUNT_ID_REDACTED_AWSAdministratorAccess
-REGION=us-east-1
+PROFILE=<PROFILE>
+REGION=<REGION>
 
 aws apprunner delete-service \
-  --service-arn arn:aws:apprunner:us-east-1:ACCOUNT_ID_REDACTED:service/mwaa-agent-chat/REDACTED \
+  --service-arn <APP_RUNNER_SERVICE_ARN> \
   --region "$REGION" --profile "$PROFILE"
 
 aws ecr delete-repository --repository-name mwaa-agent-chat --force \
@@ -139,6 +145,6 @@ while the service that uses them is still up.
 
 See the "Live example" section in the README - same flow, this is just
 where the compute actually runs now: App Runner (not your laptop) calling
-Claude (Anthropic API) and AWS (MWAA via the SSM proxy on
-`i-REDACTED`), both reached over the internet from App Runner's
-managed network, no VPC connector involved.
+Claude (Anthropic API) and AWS (MWAA via the SSM proxy instance), both
+reached over the internet from App Runner's managed network, no VPC
+connector involved.

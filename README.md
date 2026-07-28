@@ -72,7 +72,7 @@ Question: **"why did sample_4_task_dag_with_failure fail?"**
    (`AccessDeniedException: Private webserver...`) - and falls back to
    `_rest_via_ssm()`: `ssm.send_command()` runs
    `aws mwaa invoke-rest-api ...` on the proxy instance
-   (`i-REDACTED`, inside the environment's VPC), polls
+   (the one in `MWAA_SSM_PROXY_INSTANCE_ID`, inside the environment's VPC), polls
    `get_command_invocation` until it finishes, and parses the result.
    Comes back empty - **no runs at all**, not even a failed one.
 7. **Claude asks two more questions to be sure**, the same tool-call →
