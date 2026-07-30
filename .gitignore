@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 DEPLOY.local.md
+.DS_Store
 textpattern/
 HISTORY.txt
 README.txt
