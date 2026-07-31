@@ -912,6 +912,84 @@ flowchart TD
         caching (see "not applied yet") would help so much: most of what
         gets resent each time is identical.</div></li>
     </ol>
+    <div class="diagram-panel">
+      <div class="diagram-caption">
+        <span>fig. 4 - the same 12 steps, as four separate API calls</span>
+        <span class="zoom-controls">
+          <button type="button" class="zoom-btn" data-zoom="out" data-target="mermaid-fig4" aria-label="Zoom out fig. 4">−</button>
+          <span class="zoom-label" data-target-label="mermaid-fig4">100%</span>
+          <button type="button" class="zoom-btn" data-zoom="in" data-target="mermaid-fig4" aria-label="Zoom in fig. 4">+</button>
+          <button type="button" class="zoom-btn" data-zoom="reset" data-target="mermaid-fig4" aria-label="Reset zoom fig. 4">⟲</button>
+        </span>
+      </div>
+      <div class="diagram-scroll">
+<pre class="mermaid" id="mermaid-fig4">
+%%{init: {'theme':'base', 'themeVariables': {
+  'background': 'transparent',
+  'actorBkg': '#EAF2F6',
+  'actorBorder': '#1B3A4B',
+  'actorTextColor': '#14202A',
+  'actorLineColor': '#5A7A88',
+  'signalColor': '#1B3A4B',
+  'signalTextColor': '#14202A',
+  'labelBoxBkgColor': '#D8E8EC',
+  'labelBoxBorderColor': '#1B3A4B',
+  'labelTextColor': '#14202A',
+  'loopTextColor': '#14202A',
+  'noteBkgColor': '#FCEFD9',
+  'noteBorderColor': '#A8720C',
+  'noteTextColor': '#4A3A12',
+  'fontFamily': 'ui-monospace, SF Mono, Consolas, monospace',
+  'fontSize': '13px'
+}}}%%
+sequenceDiagram
+    actor User
+    participant Client
+    participant Agent as Orchestrator
+    participant Claude
+    participant Tools as Tool Layer
+
+    User->>Client: "why did daily_sales_etl fail?"
+    Client->>Agent: run_sync(question)
+
+    rect rgb(216,232,236)
+    Note over Agent,Claude: API call 1 of 4 - fresh request: system prompt + question + every tool schema
+    Agent->>Claude: send full transcript (just the question so far)
+    Claude-->>Agent: tool_use get_dag_runs(dag_id, state=failed)
+    end
+    Agent->>Tools: get_dag_runs(dag_id, state=failed)
+    Tools-->>Agent: 1 failed run - scheduled__2026-07-24
+
+    rect rgb(216,232,236)
+    Note over Agent,Claude: API call 2 of 4 - same transcript as call 1, plus the tool_result appended
+    Agent->>Claude: send full transcript (now includes the run data)
+    Claude-->>Agent: tool_use get_task_instances(dag_id, dag_run_id)
+    end
+    Agent->>Tools: get_task_instances(dag_id, dag_run_id)
+    Tools-->>Agent: task load_to_s3 failed, try 2
+
+    rect rgb(216,232,236)
+    Note over Agent,Claude: API call 3 of 4 - transcript grows again
+    Agent->>Claude: send full transcript (now includes task detail)
+    Claude-->>Agent: tool_use get_task_log(task_id, try_number=2)
+    end
+    Agent->>Tools: get_task_log(task_id, try_number=2)
+    Tools-->>Agent: log excerpt - "KeyError: 'source_table'"
+
+    rect rgb(216,232,236)
+    Note over Agent,Claude: API call 4 of 4 - Claude now has real evidence, not just a run existing
+    Agent->>Claude: send full transcript (now includes the log excerpt)
+    Claude-->>Agent: tool_use final_result(FailureDiagnosis)
+    end
+
+    Agent->>Agent: validate final_result against the schema (retry loop if invalid, fig. 3)
+    Agent-->>Client: validated FailureDiagnosis
+    Client-->>User: root cause + evidence + recommendations
+
+    Note over Client,Claude: 4 independent, stateless API calls total - each one resending everything before it. No open connection, no shared memory between them.
+</pre>
+      </div>
+    </div>
   </section>
 
   <section>
