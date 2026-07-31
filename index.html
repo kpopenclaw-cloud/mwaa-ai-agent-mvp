@@ -944,20 +944,33 @@ flowchart TD
   'fontSize': '15px'
 }}}%%
 flowchart TD
-    Q(["You ask:<br/>'why did daily_sales_etl fail?'"]) --> T{"Claude thinks:<br/>do I know enough yet?"}
-    T -->|"not yet"| ASK["Ask a tool for<br/>one piece of data"]
-    ASK --> RUN["Tool fetches it for real<br/>(run history, then tasks, then the log)"]
-    RUN --> T
-    T -->|"yes - got real evidence"| DONE(["Claude writes the answer:<br/>root cause + how to fix it"])
-    RUN -.- NOTE["Each trip round this loop is a brand-new<br/>request. Nothing is remembered automatically -<br/>the whole conversation gets resent every time."]
+    Q(["You ask:<br/>'why did daily_sales_etl fail?'"]) --> T1{"Enough yet?<br/>not yet"}
+
+    T1 --> A1["Round 1 - Claude asks:<br/>'any failed runs?'"]
+    A1 --> G1["Gets back:<br/>1 failed run"]
+    G1 --> T2{"Enough yet?<br/>still not yet"}
+
+    T2 --> A2["Round 2 - Claude asks:<br/>'which task failed?'"]
+    A2 --> G2["Gets back:<br/>task load_to_s3 failed"]
+    G2 --> T3{"Enough yet?<br/>still not yet"}
+
+    T3 --> A3["Round 3 - Claude asks:<br/>'what's the actual error?'"]
+    A3 --> G3["Gets back:<br/>KeyError: source_table"]
+    G3 --> T4{"Enough yet?<br/>yes!"}
+
+    T4 --> DONE(["Claude writes the answer:<br/>root cause + how to fix it"])
+
+    G1 -.- NOTE["Every round above is a brand-new request -<br/>the whole conversation so far gets resent each<br/>time, nothing is remembered automatically."]
 
     classDef startend fill:#D3F9D8,stroke:#1B3A4B,stroke-width:2px;
     classDef decision fill:#FFF3BF,stroke:#1B3A4B,stroke-width:2px;
-    classDef process fill:#D0EBFF,stroke:#1B3A4B,stroke-width:2px;
+    classDef ask fill:#D0EBFF,stroke:#1B3A4B,stroke-width:2px;
+    classDef get fill:#E5DBFF,stroke:#1B3A4B,stroke-width:2px;
     classDef note fill:#FBF8F1,stroke:#8A7A57,stroke-width:1px,color:#4A3F2A;
     class Q,DONE startend
-    class T decision
-    class ASK,RUN process
+    class T1,T2,T3,T4 decision
+    class A1,A2,A3 ask
+    class G1,G2,G3 get
     class NOTE note
 </pre>
       </div>
