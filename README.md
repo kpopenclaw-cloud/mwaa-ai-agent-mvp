@@ -40,6 +40,85 @@ calls that hit AWS are wrapped so an unexpected failure (throttling, a
 denied private webserver) surfaces to Claude as a `ModelRetry` instead of
 crashing the whole request.
 
+## Project structure
+
+```
+mwaa_agent/
+    agent.py       build_agent() + run_question() - the entry point every
+                    caller (CLI, web app) goes through
+    models.py       MwaaDeps, FailureDiagnosis, FailureSummary, DagFailureCount
+    prompts.py      system prompt, built from named rules (RULES dict)
+    tools.py        the @agent.tool functions Claude can call
+    tracing.py      IterationTracer - "iteration 1, 2, 3..." console tracing
+    validation.py   pre/post sensitive-data validation (see below)
+    mwaa_client.py  thin boto3 wrapper: MWAA InvokeRestApi + SSM proxy +
+                    CloudWatch Logs fallback
+main.py             CLI (one-shot and interactive)
+webapp.py            FastAPI chat backend
+static/chat.html    chat UI served by webapp.py
+```
+
+`run_question()` (`mwaa_agent/agent.py`) is what both `main.py` and
+`webapp.py` call instead of `agent.run_sync()` directly - it's what makes
+pre-validation, tracing, and post-validation happen the same way
+regardless of caller:
+
+```python
+def run_question(agent, question, deps, message_history=None):
+    cleaned_question = prevalidate_question(question)      # gate #1
+    deps.tracer = IterationTracer(cleaned_question)         # trace every tool call
+    result = agent.run_sync(cleaned_question, deps=deps, message_history=message_history)
+    output = postvalidate_output(result.output)             # gate #2
+    return output, result.all_messages()
+```
+
+## Sensitive-data validation
+
+Two independent gates around every question, both in
+[`mwaa_agent/validation.py`](mwaa_agent/validation.py):
+
+- **Pre-validation** (`prevalidate_question`) runs on the raw question
+  before it ever reaches Claude or the Anthropic API: rejects empty or
+  oversized input outright, and redacts anything that looks like a
+  credential someone pasted in by accident (AWS access/session key IDs,
+  `aws_secret_access_key=`/`aws_session_token=` fields, `sk-ant-...` keys,
+  generic `api_key=`/`secret=`/`password=` fields, PEM private-key blocks,
+  `Bearer ...` tokens).
+- **Post-validation** (`postvalidate_output`) runs the same redaction over
+  every text field of the model's finished answer before it's returned,
+  in case a credential-shaped string leaked in from a log line or tool
+  result. The system prompt's `no_secrets_in_output` rule
+  ([`prompts.py`](mwaa_agent/prompts.py)) already tells Claude not to quote
+  secrets verbatim - this is what actually enforces it, since a prompt
+  instruction is a request, not a guarantee.
+
+Both directions share one pattern table (`SENSITIVE_PATTERNS`), and both
+log which pattern fired (never the matched value itself) so a redaction is
+visible without printing the secret it caught.
+
+## Iteration tracing
+
+Every tool call Claude makes is printed to the console as it happens, via
+[`mwaa_agent/tracing.py`](mwaa_agent/tracing.py)'s `IterationTracer`:
+
+```
+======================================================================
+[LLM] New question: 'give me a quick health summary of this environment'
+======================================================================
+[iteration 1] Claude called get_environment_info()
+[iteration 1] get_environment_info returned: {'name': 'airflow-2-11', ...
+[iteration 2] Claude called get_failed_dags_summary(limit=100)
+[iteration 2] get_failed_dags_summary returned: {'failed_dag_count': 1, ...
+[LLM] Finished after 2 tool call(s) - answering as FailureSummary
+======================================================================
+```
+
+One `IterationTracer` is created per question and threaded through
+`MwaaDeps.tracer`, so every `@agent.tool` function in `tools.py` logs
+through the same counter - this is what makes it possible to see exactly
+what happened between the LLM and each tool call, in order, as it happens,
+instead of only seeing the final answer.
+
 ## Live example: question to answer
 
 This is a real trace against the deployed instance (see
@@ -58,10 +137,12 @@ Question: **"why did sample_4_task_dag_with_failure fail?"**
 3. **Session lookup.** No `session_id` was sent, so `webapp.py` mints a
    new UUID and looks it up in the in-memory `_sessions` dict - empty,
    this is the first message, so `message_history=None`.
-4. **Into the agent loop.** `_agent.run_sync(message, deps=_deps,
-   message_history=None)` hands off to PydanticAI, which sends Claude the
-   system prompt, the question, and JSON schemas for all 8 tools plus the
-   synthetic `final_result` tool (built from `Union[FailureDiagnosis,
+4. **Into the agent loop.** `webapp.py` calls `run_question(_agent, message,
+   _deps, message_history=None)`. It pre-validates the question, attaches a
+   fresh `IterationTracer`, then hands off to PydanticAI's
+   `agent.run_sync(...)`, which sends Claude the system prompt, the
+   question, and JSON schemas for all 8 tools plus the synthetic
+   `final_result` tool (built from `Union[FailureDiagnosis,
    FailureSummary]`).
 5. **Claude's first tool call.** It reads this as a root-cause question
    about one named DAG and calls
@@ -83,11 +164,15 @@ Question: **"why did sample_4_task_dag_with_failure fail?"**
 8. **Enough evidence, final answer.** Claude emits `tool_use
    final_result(...)` shaped as `FailureDiagnosis` (not `FailureSummary` -
    this was a named-DAG question). PydanticAI validates it against the
-   Union schema and accepts it.
-9. **Session saved, response sent.** `result.all_messages()` is stored in
-   `_sessions[session_id]` so a follow-up like "what about the other DAGs?"
-   has this context. FastAPI returns the JSON below to the browser, which
-   renders it via `renderDiagnosis()`.
+   Union schema and accepts it. `run_question()` then runs
+   `postvalidate_output()` over it (no secrets found here, so it passes
+   through unchanged) and prints the `[LLM] Finished after N tool call(s)`
+   trace line.
+9. **Session saved, response sent.** The updated message history
+   `run_question()` returned is stored in `_sessions[session_id]` so a
+   follow-up like "what about the other DAGs?" has this context. FastAPI
+   returns the JSON below to the browser, which renders it via
+   `renderDiagnosis()`.
 
 The actual response:
 
@@ -263,7 +348,7 @@ to close that gap:
 
 - Every `@agent.tool` function's parameters (`get_dag_runs(dag_id, state,
   limit)`, etc.) are turned into a JSON schema straight from the Python type
-  hints in [agent.py](mwaa_agent/agent.py) - there's no hand-maintained
+  hints in [tools.py](mwaa_agent/tools.py) - there's no hand-maintained
   schema to drift out of sync with the code.
 - `output_type=FailureDiagnosis` in `build_agent()` becomes a schema Claude
   must satisfy in its own response. If it doesn't validate - a missing

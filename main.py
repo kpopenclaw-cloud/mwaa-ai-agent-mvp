@@ -17,13 +17,16 @@ import sys
 
 from dotenv import load_dotenv
 
-from mwaa_agent.agent import FailureDiagnosis, FailureSummary, MwaaDeps, build_agent
+from mwaa_agent.agent import build_agent, run_question
+from mwaa_agent.models import FailureDiagnosis, FailureSummary, MwaaDeps
 from mwaa_agent.mwaa_client import MwaaClient
+from mwaa_agent.validation import ValidationError
 
 load_dotenv()
 
 
 def print_diagnosis(d) -> None:
+    """Pretty-print a FailureDiagnosis or FailureSummary to the terminal."""
     print("\n" + "=" * 70)
     print(f"SUMMARY: {d.summary}\n")
 
@@ -62,6 +65,8 @@ def print_diagnosis(d) -> None:
 
 
 def main() -> int:
+    """Parse CLI args and run either a single question or an interactive
+    follow-up loop, in both cases through agent.run_question()."""
     parser = argparse.ArgumentParser(description="MWAA DAG failure diagnosis agent")
     parser.add_argument("question", nargs="?", help="Question to ask (omit for interactive mode)")
     parser.add_argument("--env", default=os.getenv("MWAA_ENV_NAME"), help="MWAA environment name")
@@ -90,8 +95,12 @@ def main() -> int:
     agent = build_agent(args.model)
 
     if args.question:
-        result = agent.run_sync(args.question, deps=deps)
-        print_diagnosis(result.output)
+        try:
+            output, _ = run_question(agent, args.question, deps)
+        except ValidationError as e:
+            print(f"\nRejected: {e}\n")
+            return 1
+        print_diagnosis(output)
         return 0
 
     # Interactive mode with conversation memory
@@ -104,9 +113,12 @@ def main() -> int:
             break
         if not question or question.lower() in {"quit", "exit"}:
             break
-        result = agent.run_sync(question, deps=deps, message_history=history)
-        history = result.all_messages()
-        print_diagnosis(result.output)
+        try:
+            output, history = run_question(agent, question, deps, message_history=history)
+        except ValidationError as e:
+            print(f"\nRejected: {e}\n")
+            continue
+        print_diagnosis(output)
     return 0
 
 

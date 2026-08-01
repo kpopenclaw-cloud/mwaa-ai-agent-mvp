@@ -23,8 +23,10 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-from mwaa_agent.agent import FailureDiagnosis, FailureSummary, MwaaDeps, build_agent
+from mwaa_agent.agent import build_agent, run_question
+from mwaa_agent.models import FailureDiagnosis, FailureSummary, MwaaDeps
 from mwaa_agent.mwaa_client import MwaaClient
+from mwaa_agent.validation import ValidationError
 
 load_dotenv()
 
@@ -52,6 +54,8 @@ _security = HTTPBasic()
 
 
 def require_auth(credentials: HTTPBasicCredentials = Depends(_security)) -> None:
+    """FastAPI dependency enforcing HTTP Basic auth on every route below.
+    Raises 401 on a bad/missing username or password."""
     user_ok = secrets.compare_digest(credentials.username, CHAT_USERNAME)
     pass_ok = secrets.compare_digest(credentials.password, CHAT_PASSWORD)
     if not (user_ok and pass_ok):
@@ -91,26 +95,35 @@ class ChatResponse(BaseModel):
 
 @app.get("/")
 def index() -> FileResponse:
+    """Serve the single-page chat UI."""
     return FileResponse(Path(__file__).parent / "static" / "chat.html")
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """Liveness check - also used by App Runner's health check config."""
     return {"status": "ok", "environment": ENV_NAME, "region": REGION}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
+    """Ask the agent one question for a chat session.
+
+    Looks up (or starts) the session's message history, runs the question
+    through agent.run_question() (pre-validation -> tracing -> post-
+    validation), and stores the updated history for the next follow-up.
+    """
     session_id = req.session_id or str(uuid.uuid4())
     history = _sessions.get(session_id)
 
     try:
-        result = _agent.run_sync(req.message, deps=_deps, message_history=history)
+        output, all_messages = run_question(_agent, req.message, _deps, message_history=history)
+    except ValidationError as e:  # rejected before it ever reached the model
+        return ChatResponse(session_id=session_id, kind="error", summary=str(e), detail={})
     except Exception as e:  # keep the chat alive even on an unexpected failure
         return ChatResponse(session_id=session_id, kind="error", summary=str(e), detail={})
 
-    _sessions[session_id] = result.all_messages()
-    output = result.output
+    _sessions[session_id] = all_messages
     kind = "summary" if isinstance(output, FailureSummary) else "diagnosis"
     assert isinstance(output, (FailureDiagnosis, FailureSummary))
     return ChatResponse(
@@ -120,4 +133,5 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 @app.delete("/api/chat/{session_id}")
 def reset_session(session_id: str) -> dict[str, bool]:
+    """Drop a session's message history, starting its next question fresh."""
     return {"cleared": _sessions.pop(session_id, None) is not None}
