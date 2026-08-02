@@ -2,7 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
-DEPLOY.local.md
+docs/DEPLOY.local.md
 .DS_Store
 textpattern/
 HISTORY.txt

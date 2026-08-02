@@ -4,6 +4,9 @@
 __pycache__
 *.pyc
 index.html
-main.py
 readme.md
 README.md
+docs/
+apps/cli/
+fixtures/
+scripts/

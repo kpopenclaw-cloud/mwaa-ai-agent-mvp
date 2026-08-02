@@ -2,11 +2,14 @@
 CLI for the MWAA failure-diagnosis agent.
 
 One-shot:
-    python main.py --env my-mwaa-env --region us-east-1 \
+    python -m apps.cli --env my-mwaa-env --region us-east-1 \
         "Why did my dag 'daily_sales_etl' fail?"
 
 Interactive (keeps conversation context between questions):
-    python main.py --env my-mwaa-env
+    python -m apps.cli --env my-mwaa-env
+
+Run as `python -m apps.cli` (not `python apps/cli/__main__.py`) from the
+repo root so `mwaa_agent` resolves as a sibling top-level package.
 """
 
 from __future__ import annotations

@@ -43,22 +43,35 @@ crashing the whole request.
 ## Project structure
 
 ```
-mwaa_agent/
-    agent.py       build_agent() + run_question() - the entry point every
-                    caller (CLI, web app) goes through
-    models.py       MwaaDeps, FailureDiagnosis, FailureSummary, DagFailureCount
-    prompts.py      system prompt, built from named rules (RULES dict)
-    tools.py        the @agent.tool functions Claude can call
-    tracing.py      IterationTracer - "iteration 1, 2, 3..." console tracing
-    validation.py   pre/post sensitive-data validation (see below)
-    mwaa_client.py  thin boto3 wrapper: MWAA InvokeRestApi + SSM proxy +
-                    CloudWatch Logs fallback
-main.py             CLI (one-shot and interactive)
-webapp.py            FastAPI chat backend
-static/chat.html    chat UI served by webapp.py
+mwaa_agent/                core library
+    agent.py                build_agent() + run_question() - the entry point every
+                             caller (CLI, web app) goes through
+    models.py                MwaaDeps, FailureDiagnosis, FailureSummary, DagFailureCount
+    prompts.py                system prompt, assembled from config/rules/*.md
+    tools.py                  the @agent.tool functions Claude can call
+    tracing.py                IterationTracer - "iteration 1, 2, 3..." console tracing
+    mwaa_client.py            thin boto3 wrapper: MWAA InvokeRestApi + SSM proxy +
+                               CloudWatch Logs fallback
+    validation/               pre/post validation (see below)
+        errors.py               ValidationError
+        patterns.py              credential/PII regex tables + redact()
+        scope.py                 off-topic / out-of-scope-AWS-service guard
+        prevalidation.py         prevalidate_question()
+        postvalidation.py        postvalidate_output()
+config/rules/*.md           the rule set - one file per rule (see below)
+apps/
+    cli/__main__.py            CLI, run via `python -m apps.cli`
+    web/webapp.py               FastAPI chat backend, run via `uvicorn apps.web.webapp:app`
+    web/static/chat.html       chat UI served by webapp.py
+fixtures/sensitive_dags/    test DAGs that fail with fake secrets/PII in
+                             their logs, for exercising redaction end-to-end
+scripts/
+    deploy_sensitive_test_dags.py  uploads + triggers the fixtures above
+docs/
+    DEPLOY.md                  deployment guide
 ```
 
-`run_question()` (`mwaa_agent/agent.py`) is what both `main.py` and
+`run_question()` (`mwaa_agent/agent.py`) is what both the CLI and
 `webapp.py` call instead of `agent.run_sync()` directly - it's what makes
 pre-validation, tracing, and post-validation happen the same way
 regardless of caller:
@@ -75,26 +88,61 @@ def run_question(agent, question, deps, message_history=None):
 ## Sensitive-data validation
 
 Two independent gates around every question, both in
-[`mwaa_agent/validation.py`](mwaa_agent/validation.py):
+[`mwaa_agent/validation/`](mwaa_agent/validation/):
 
-- **Pre-validation** (`prevalidate_question`) runs on the raw question
-  before it ever reaches Claude or the Anthropic API: rejects empty or
-  oversized input outright, and redacts anything that looks like a
-  credential someone pasted in by accident (AWS access/session key IDs,
-  `aws_secret_access_key=`/`aws_session_token=` fields, `sk-ant-...` keys,
-  generic `api_key=`/`secret=`/`password=` fields, PEM private-key blocks,
-  `Bearer ...` tokens).
-- **Post-validation** (`postvalidate_output`) runs the same redaction over
-  every text field of the model's finished answer before it's returned,
-  in case a credential-shaped string leaked in from a log line or tool
-  result. The system prompt's `no_secrets_in_output` rule
-  ([`prompts.py`](mwaa_agent/prompts.py)) already tells Claude not to quote
-  secrets verbatim - this is what actually enforces it, since a prompt
-  instruction is a request, not a guarantee.
+- **Pre-validation** (`prevalidation.py`) runs on the raw question before
+  it ever reaches Claude or the Anthropic API, in order:
+  1. Rejects empty or oversized input outright.
+  2. **Scope guard** (`scope.py`): rejects questions about IAM, EC2, RDS,
+     VPC, Lambda, or any other AWS service, and requests for
+     credentials/access keys/API keys/passwords - this agent has no
+     tools for any of that and shouldn't speculate. Also redirects
+     off-topic chit-chat ("hi", "thanks", "what can you do?") to a canned
+     "I'm an MWAA/Airflow diagnostic agent" reply instead of spending an
+     LLM call on it. Both cases short-circuit before Claude is ever
+     called.
+  3. Redacts anything that looks like a credential someone pasted in by
+     accident (AWS access/session key IDs, `aws_secret_access_key=`/
+     `aws_session_token=` fields, `sk-ant-...` keys, generic
+     `api_key=`/`secret=`/`password=` fields, PEM private-key blocks,
+     `Bearer ...` tokens).
+- **Post-validation** (`postvalidation.py`) runs the same credential
+  redaction over every text field of the model's finished answer before
+  it's returned, in case a credential-shaped string leaked in from a log
+  line or tool result - plus a second pass for **PII** (email, SSN,
+  phone, credit card numbers), since a failed task's traceback can just
+  as easily name a customer record as a secret. The system prompt's
+  `no_secrets_in_output` and `scope_guard` rules
+  ([`config/rules/`](config/rules/)) already tell Claude not to quote
+  secrets verbatim or wander outside MWAA - this is what actually
+  enforces both, since a prompt instruction is a request, not a
+  guarantee.
 
-Both directions share one pattern table (`SENSITIVE_PATTERNS`), and both
-log which pattern fired (never the matched value itself) so a redaction is
-visible without printing the secret it caught.
+Both directions log which pattern fired (never the matched value itself)
+so a redaction is visible without printing the secret or PII it caught.
+See [`mwaa_agent/validation/patterns.py`](mwaa_agent/validation/patterns.py)
+for the full regex tables.
+
+## Rule set
+
+The system prompt's rules each live as their own file in
+[`config/rules/`](config/rules/) instead of a hardcoded Python dict - add,
+edit, or remove a rule by touching one small `.md` file, no need to open
+any Python. `mwaa_agent/prompts.py` loads every file in filename order
+(the numeric prefix, e.g. `01_`, only controls prompt order) and joins
+them into the `Rules:` section of the system prompt:
+
+```
+config/rules/
+    01_evidence_only.md
+    02_prefer_latest_run.md
+    03_efficient_tool_use.md
+    04_healthy_state.md
+    05_conversation_context.md
+    06_tool_failure_handling.md
+    07_no_secrets_in_output.md
+    08_scope_guard.md
+```
 
 ## Iteration tracing
 
@@ -122,7 +170,7 @@ instead of only seeing the final answer.
 ## Live example: question to answer
 
 This is a real trace against the deployed instance (see
-[DEPLOY.md](DEPLOY.md)) - `airflow-2-11`, whose webserver is
+[docs/DEPLOY.md](docs/DEPLOY.md)) - `airflow-2-11`, whose webserver is
 `PRIVATE_ONLY`, so this specific run also exercises the SSM proxy path.
 Question: **"why did sample_4_task_dag_with_failure fail?"**
 
@@ -237,7 +285,7 @@ Note: `airflow:InvokeRestApi` can also be scoped by Airflow role, e.g. `.../envi
 One-shot question:
 
 ```bash
-python main.py --env my-mwaa-env --region us-east-1 \
+python -m apps.cli --env my-mwaa-env --region us-east-1 \
   "Why did my dag daily_sales_etl fail?"
 ```
 
@@ -245,7 +293,7 @@ Interactive session (keeps conversation history):
 
 ```bash
 export MWAA_ENV_NAME=my-mwaa-env
-python main.py
+python -m apps.cli
 you> why did daily_sales_etl fail yesterday?
 you> show me the status of all dags
 ```
@@ -267,14 +315,14 @@ print(diagnosis.recommendations)
 Use a different model (e.g. Bedrock, so nothing leaves AWS):
 
 ```bash
-python main.py --env my-mwaa-env --model bedrock:anthropic.claude-sonnet-4-5 "why did my dag fail?"
+python -m apps.cli --env my-mwaa-env --model bedrock:anthropic.claude-sonnet-4-5 "why did my dag fail?"
 ```
 
 Count/aggregate questions work the same way, one-shot or interactive:
 
 ```bash
-python main.py --env my-mwaa-env "how many dags failed in this environment?"
-python main.py --env my-mwaa-env "how many dags have failed across all environments?"
+python -m apps.cli --env my-mwaa-env "how many dags failed in this environment?"
+python -m apps.cli --env my-mwaa-env "how many dags have failed across all environments?"
 ```
 
 ### Web chat UI
@@ -286,7 +334,7 @@ work in the browser the same way they do in the interactive CLI:
 ```bash
 pip install -r requirements.txt   # now includes fastapi + uvicorn
 export MWAA_ENV_NAME=my-mwaa-env
-uvicorn webapp:app --reload --port 8000
+uvicorn apps.web.webapp:app --reload --port 8000
 ```
 
 Open `http://localhost:8000`. Sessions are in-memory and per-process -
@@ -362,7 +410,7 @@ to close that gap:
 Short version: Pydantic is the validation/typing layer; PydanticAI is the
 agent framework that leans on it to keep both *what the agent sends to its
 tools* and *what it hands back to you* well-formed - which is exactly what
-lets `main.py` print `d.recommendations` without ever checking whether it
+lets the CLI print `d.recommendations` without ever checking whether it
 exists.
 
 ## Notes & extension ideas

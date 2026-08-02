@@ -1,14 +1,18 @@
 """
 The system prompt, built from named rules instead of one long string.
 
-Each entry in RULES is one independent instruction. Keeping them separate
-(instead of a single paragraph) means a rule can be read, edited, or
-removed on its own without re-reading and re-editing the whole prompt.
-build_system_prompt() assembles them into the final string PydanticAI
-sends to Claude on every request.
+Each rule lives as its own file in config/rules/ (one independent
+instruction per file) instead of a hardcoded Python dict - a rule can be
+read, edited, added, or removed by touching one small file, without
+opening this module. build_system_prompt() assembles ROLE +
+QUESTION_ROUTING + every rule file into the final string PydanticAI sends
+to Claude on every request.
 """
 
 from __future__ import annotations
+
+import re
+from pathlib import Path
 
 ROLE = "You are an expert Apache Airflow / AWS MWAA site-reliability assistant."
 
@@ -40,33 +44,23 @@ ROOT-CAUSE questions ("why did my dag fail", "what happened to X"):
    permissions, upstream data, etc.).\
 """
 
-# Each rule is independent - named so a specific one is easy to find,
-# short so it stays a single instruction rather than a paragraph.
-RULES: dict[str, str] = {
-    "evidence_only": (
-        "Base the root cause ONLY on evidence you retrieved via tools; "
-        "if logs are inconclusive, say so and recommend what to check next."
-    ),
-    "prefer_latest_run": "Prefer the latest failed run unless the user specifies a date/run.",
-    "efficient_tool_use": "Keep tool usage efficient; don't fetch logs for tasks that succeeded.",
-    "healthy_state": "If everything is healthy, say so and summarize the latest run states.",
-    "conversation_context": (
-        "This is a continuing conversation. For follow-ups (\"what about "
-        "yesterday?\", \"and the tasks?\", \"same for the other env\") reuse "
-        "context already established earlier in the conversation instead of "
-        "re-asking the user which DAG or environment they mean."
-    ),
-    "tool_failure_handling": (
-        "If a tool call fails, say what's inconclusive and what to check "
-        "next rather than guessing at a root cause you don't have evidence for."
-    ),
-    "no_secrets_in_output": (
-        "Never include a raw credential, access key, session token, or "
-        "connection password verbatim in your answer, even if one appears "
-        "in a log or tool result. Describe that a secret was present in the "
-        "evidence without quoting its value."
-    ),
-}
+# One .md file per rule in config/rules/, e.g. "01_evidence_only.md".
+# The numeric prefix only controls prompt order (sorted glob); it's
+# stripped to get the rule's name.
+_RULES_DIR = Path(__file__).resolve().parent.parent / "config" / "rules"
+
+
+def _load_rules() -> dict[str, str]:
+    """Read every config/rules/*.md file into {rule_name: rule_text}, in
+    filename order."""
+    rules: dict[str, str] = {}
+    for path in sorted(_RULES_DIR.glob("*.md")):
+        name = re.sub(r"^\d+_", "", path.stem)
+        rules[name] = path.read_text(encoding="utf-8").strip()
+    return rules
+
+
+RULES: dict[str, str] = _load_rules()
 
 
 def build_system_prompt() -> str:

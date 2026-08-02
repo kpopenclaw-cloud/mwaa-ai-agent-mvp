@@ -5,8 +5,8 @@ Keeps a per-browser-session message history server-side so follow-up
 questions ("what about yesterday?", "and the tasks?") work the same way
 the interactive CLI's follow-up mode does.
 
-Run:
-    uvicorn webapp:app --reload --port 8000
+Run (from the repo root, so `mwaa_agent` resolves as a sibling package):
+    uvicorn apps.web.webapp:app --reload --port 8000
 """
 
 from __future__ import annotations
