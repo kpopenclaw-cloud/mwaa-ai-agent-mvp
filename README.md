@@ -87,6 +87,11 @@ def run_question(agent, question, deps, message_history=None):
 
 ## Sensitive-data validation
 
+See [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md) for how this maps onto the
+standard input/output agentic-guardrail taxonomy, including which
+categories (prompt injection detection, content moderation, LLM-as-a-judge)
+aren't built yet.
+
 Two independent gates around every question, both in
 [`mwaa_agent/validation/`](mwaa_agent/validation/):
 
